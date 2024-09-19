@@ -8,7 +8,7 @@ X, _ = make_blobs(n_samples=300, centers=4, cluster_std=1.0, random_state=42)
 X = StandardScaler().fit_transform(X)
 
 # List of all algorithms to test
-algorithms = [ 'som', 'agglomerative',
+algorithms = [ 'som',
     'kmeans', 'kmedoids', 'minibatchkmeans', 'dbscan', 'agglomerativeclustering', 
     'meanshift', 'spectralclustering', 'affinitypropagation', 'birch', 
     'optics', 'gaussianmixture', 'hdbscan'
