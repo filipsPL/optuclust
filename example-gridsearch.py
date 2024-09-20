@@ -1,60 +1,47 @@
-from sklearn.datasets import make_blobs
 from optuclust import ClustGridSearch  # Import the ClustGridSearch class
 
-# Generate a synthetic dataset
-X, _ = make_blobs(n_samples=300, centers=4, n_features=2, random_state=42)
+import numpy as np
+from sklearn.datasets import make_blobs
 
-# Initialize the ClustGridSearch with 'full' mode
-grid_search = ClustGridSearch(mode="fast", scoring="silhouette_score", verbose=True)
+# Generate sample data
+X, _ = make_blobs(n_samples=200, centers=4, cluster_std=0.60, random_state=0)
 
-# Fit the clustering search
-grid_search.fit(X)
+# Create ClustGridSearch instance with 'full' mode
+clust_search = ClustGridSearch(mode='full', n_trials=10, scoring='silhouette_score', verbose=False)
 
+# Fit the ClustGridSearch to the data
+clust_search.fit(X)
 
-# Get all results
+print("=" * 50)
 
-print("--------- Search summary ----------")
+results = clust_search.cv_results_
 
-results = grid_search.get_results()
-for result in results:
-    print(result)
+# Loop through the dictionary and print results in a human-readable format
+print("Clustering Results:\n")
+for i in range(len(results['algorithm'])):
+    print(f"Algorithm: {results['algorithm'][i]}")
+    print(f"Mean Test Score: {results['mean_test_score'][i]:.4f}")
+    print("Parameters:")
+    for param, value in results['params'][i].items():
+        print(f"  {param}: {value}")
+    print(f"Model: {results['model'][i]}")
+    print("-" * 50)  # Separator line for readability
 
-print("--------- The best method ----------")
+print("=" * 50)
+# Print the summary and parameters of the best algorithm
+print(f"\nBest Algorithm: {clust_search.best_estimator_.algorithm}")
+print(f"Best Score: {clust_search.best_score_}")
+print(f"Best Parameters: {clust_search.best_params_}")
+print("=" * 50)
 
+# Get labels, medoids, and centroids
+labels = clust_search.labels_
+medoids = clust_search.medoids_
+centroids = clust_search.centroids_
 
-# Get the best estimator, score, algorithm name, and parameters
-print("Best Clustering Method:", grid_search.best_algorithm_name)
-print("Best Score:", grid_search.best_score_)
-print("Best Parameters:", grid_search.best_params_)
-
-
-best_method = grid_search.best_estimator_
-
-
-# Get the best estimator and the best score
-print("Best Clustering Method:", grid_search.best_estimator_)
-print("Best Score:", grid_search.best_score_)
-
-
-
-
-# Print the cluster labels, centroids, and medoids (if available)
-if best_method is not None:
-    print("\nBest Method Details:")
-
-    print("Best method name:", best_method.best_algorithm_name)
-    
-    # Print cluster labels
-    print("Cluster Labels:", best_method.labels_[:10])  # Print first 10 labels
-    
-    # Print centroids (if available)
-    if hasattr(best_method, 'centroids_') and best_method.centroids_ is not None:
-        print("Centroids:", best_method.centroids_)
-    else:
-        print("Centroids: Not available for this method.")
-    
-    # Print medoids (if available)
-    if hasattr(best_method, 'medoids_') and best_method.medoids_ is not None:
-        print("Medoids:", best_method.medoids_)
-    else:
-        print("Medoids: Not available for this method.")
+print("\nLabels:")
+print(labels)
+print("\nMedoids:")
+print(medoids)
+print("\nCentroids:")
+print(centroids)

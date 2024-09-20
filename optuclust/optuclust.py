@@ -1,26 +1,29 @@
 import optuna
 import numpy as np
-
-from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
-from sklearn.cluster import KMeans, MiniBatchKMeans, DBSCAN, AgglomerativeClustering, MeanShift, SpectralClustering
-from sklearn.cluster import AffinityPropagation, Birch, OPTICS
-from sklearn.mixture import GaussianMixture
-import hdbscan
-from kmedoids import KMedoids
 import time
 
+from sklearn.base import BaseEstimator, ClusterMixin
+from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
+from sklearn.cluster import (KMeans, MiniBatchKMeans, DBSCAN, AgglomerativeClustering, MeanShift,
+                             SpectralClustering, AffinityPropagation, Birch, OPTICS)
+from sklearn.mixture import GaussianMixture
+
+import hdbscan
+from kmedoids import KMedoids
 from sklearn_som.som import SOM
 
-class Optimizer:
-    def __init__(self, algorithm, n_trials=50, scoring=['silhouette_score'], verbose=False, show_progress_bar=True):
+
+class Optimizer(BaseEstimator, ClusterMixin):
+    def __init__(self, algorithm, n_trials=50, scoring='silhouette_score', verbose=False, show_progress_bar=True):
         self.algorithm = algorithm
         self.n_trials = n_trials
-        self.scoring = scoring if isinstance(scoring, list) else [scoring]
+        self.scoring = scoring
         self.verbose = verbose
         self.show_progress_bar = show_progress_bar
         self.best_params_ = None
         self.study = None
         self.model = None
+        self.labels_ = None
         self.X_ = None  # Store X after fitting
 
         # Set Optuna logging verbosity based on 'verbose' parameter
@@ -28,8 +31,8 @@ class Optimizer:
             optuna.logging.set_verbosity(optuna.logging.INFO if verbose else optuna.logging.WARNING)
         elif isinstance(verbose, int):
             optuna.logging.set_verbosity(verbose)
-    
-    def fit(self, X):
+        
+    def fit(self, X, y=None):
         self.X_ = X  # Store X for later use
 
         def objective(trial):
@@ -38,46 +41,50 @@ class Optimizer:
             labels = model.labels_ if hasattr(model, 'labels_') else model.predict(X)
 
             # Scoring logic, pass the trial object for pruning
-            scores = self._compute_scores(X, labels, trial)
-            return scores
+            score = self._compute_score(X, labels)
+            return score
 
-        # Create a study with directions for all objectives (we are maximizing all)
-        self.study = optuna.create_study(directions=['maximize'] * len(self.scoring))
+        # Determine direction of optimization
+        direction = 'maximize'
+        if self.scoring == 'davies_bouldin_score':
+            direction = 'minimize'
+
+        self.study = optuna.create_study(direction=direction)
         self.study.optimize(objective, n_trials=self.n_trials, show_progress_bar=self.show_progress_bar)
         self.best_params_ = self.study.best_params
         self.model = self._get_best_model(X)
         self.model.fit(X)
 
-    def _compute_scores(self, X, labels, trial):
+        # Store labels_
+        self.labels_ = self.model.labels_ if hasattr(self.model, 'labels_') else self.model.predict(X)
+        return self
+
+    def fit_predict(self, X, y=None):
+        self.fit(X, y)
+        return self.labels_
+
+    def predict(self, X):
+        return self.model.predict(X)
+
+    def _compute_score(self, X, labels):
         # Prune if there is only one cluster
         if len(set(labels)) <= 1:
             raise optuna.TrialPruned("Only one cluster found, pruning this trial.")
 
-        scores = []
-        for scoring_method in self.scoring:
-            if scoring_method == 'silhouette_score':
-                score = silhouette_score(X, labels)
-            elif scoring_method == 'calinski_harabasz_score':
-                score = calinski_harabasz_score(X, labels)
-            elif scoring_method == 'davies_bouldin_score':
-                score = -1 * davies_bouldin_score(X, labels)  # Return negative davies_bouldin_score
-            else:
-                raise ValueError(f"Unsupported scoring method: {scoring_method}")
-            scores.append(score)
-
-        return scores
-
-    @property
-    def labels_(self):
-        if hasattr(self.model, 'labels_'):
-            return self.model.labels_
-        elif self.X_ is not None:
-            return self.model.predict(self.X_)  # Use stored X_
+        if self.scoring == 'silhouette_score':
+            score = silhouette_score(X, labels)
+        elif self.scoring == 'calinski_harabasz_score':
+            score = calinski_harabasz_score(X, labels)
+        elif self.scoring == 'davies_bouldin_score':
+            score = davies_bouldin_score(X, labels)  # For minimization
         else:
-            raise ValueError("Model has not been fitted and X is not available for prediction.")
+            raise ValueError(f"Unsupported scoring method: {self.scoring}")
+        return score
 
     def _suggest_model(self, trial, X):
-        # KMeans
+        # Implement the parameter suggestions for each algorithm here
+        # For brevity, only a couple of algorithms are shown
+            # KMeans
         if self.algorithm == 'kmeans':
             n_clusters = trial.suggest_int('n_clusters', 2, 50)
             max_iter = trial.suggest_int('max_iter', 100, 500)
@@ -183,34 +190,13 @@ class Optimizer:
             self._labels = labels  # Use internal variable instead of labels_ property
             return som  # Return the trained SOM model
 
-
         else:
             raise ValueError(f"Unsupported algorithm: {self.algorithm}")
-
-    def _compute_score(self, X, labels, trial):
-        # Check if only one cluster was found and prune the trial
-        if len(set(labels)) <= 1:
-            raise optuna.TrialPruned("Only one cluster found, pruning this trial.")
-        
-        scores = []
-        for scoring_method in self.scoring:
-            if scoring_method == 'silhouette_score':
-                score = silhouette_score(X, labels)
-            elif scoring_method == 'calinski_harabasz_score':
-                score = calinski_harabasz_score(X, labels)
-            elif scoring_method == 'davies_bouldin_score':
-                score = -1 * davies_bouldin_score(X, labels)  # Return negative davies_bouldin_score
-            else:
-                raise ValueError(f"Unsupported scoring method: {scoring_method}")
-            scores.append(score)
-        
-        return sum(scores) / len(scores)
-
 
     def _get_best_model(self, X):
         # Recreate the best model with optimized parameters
         trial = optuna.trial.FixedTrial(self.best_params_)
-        return self._suggest_model(trial, X)  # Pass X to _suggest_model
+        return self._suggest_model(trial, X)
 
     @property
     def cluster_centers_(self):
@@ -220,53 +206,73 @@ class Optimizer:
 
     @property
     def centroids_(self):
-        # For algorithms that don't provide centroids directly (e.g., DBSCAN), calculate using NumPy
+        # For algorithms that don't provide centroids directly
         if hasattr(self.model, 'cluster_centers_'):
             return self.model.cluster_centers_
-        else:
-            # Calculate centroids manually for each cluster
+        elif self.labels_ is not None:
             unique_labels = np.unique(self.labels_)
-            return np.array([self.X_[self.labels_ == label].mean(axis=0) for label in unique_labels])
+            centroids = []
+            for label in unique_labels:
+                if label == -1:  # Handle noise in clustering algorithms like DBSCAN
+                    continue
+                cluster_points = self.X_[self.labels_ == label]
+                centroid = cluster_points.mean(axis=0)
+                centroids.append(centroid)
+            return np.array(centroids)
+        else:
+            return None
 
     @property
     def medoids_(self):
-        # For algorithms that don’t have medoids, calculate using the pairwise distance between points
+        # For algorithms that don’t have medoids, calculate them if possible
         if isinstance(self.model, KMedoids):
             return self.model.cluster_centers_
-        else:
-            # Calculate medoids manually by minimizing intra-cluster distance
+        elif self.labels_ is not None and len(np.unique(self.labels_)) > 0:
             unique_labels = np.unique(self.labels_)
             medoids = []
             for label in unique_labels:
+                if label == -1:  # Handle noise in clustering algorithms like DBSCAN
+                    continue
                 cluster_points = self.X_[self.labels_ == label]
+                if len(cluster_points) == 0:
+                    continue
+                # Compute pairwise distances
                 distances = np.sum(np.abs(cluster_points[:, np.newaxis] - cluster_points[np.newaxis, :]), axis=2)
-                medoids.append(cluster_points[np.argmin(np.sum(distances, axis=1))])
+                # Find the index of the point with minimal total distance to other points
+                medoid_index = np.argmin(np.sum(distances, axis=1))
+                medoids.append(cluster_points[medoid_index])
             return np.array(medoids)
-        
+        else:
+            return None
 
-class ClustGridSearch:
-    def __init__(self, mode="full", scoring="silhouette_score", verbose=False):
+
+class ClustGridSearch(BaseEstimator, ClusterMixin):
+    def __init__(self, mode='full', n_trials=20, scoring='silhouette_score', verbose=False, show_progress_bar=True):
         """
         Initialize the ClustGridSearch.
-        
-        :param mode: 'full' to test all algorithms, 'fast' to test a subset (kmeans and hdbscan)
-        :param scoring: The metric used to select the best clustering (default: 'silhouette_score')
-        :param verbose: Whether to print additional information during the search
+
+        :param mode: 'full' to test all algorithms, 'fast' to test a subset (kmeans and hdbscan).
+        :param n_trials: Number of trials for each algorithm's hyperparameter optimization.
+        :param scoring: The metric used to select the best clustering (default: 'silhouette_score').
+        :param verbose: Whether to print additional information during the search.
         """
         self.mode = mode
+        self.n_trials = n_trials
         self.scoring = scoring
         self.verbose = verbose
-        self.cv_results_ = []
+        self.show_progress_bar = show_progress_bar
+
+        self.cv_results_ = {}
         self.best_estimator_ = None
         self.best_score_ = None
-        self.best_algorithm_name = None
         self.best_params_ = None
-        
+        self.best_index_ = None
+
         # Define algorithms to test based on mode
         if self.mode == "full":
             self.algorithms = [
-                'som', 'kmeans', 'kmedoids', 'minibatchkmeans', 'dbscan', 
-                'agglomerativeclustering', 'meanshift', 'spectralclustering', 
+                'kmeans', 'kmedoids', 'minibatchkmeans', 'dbscan',
+                'agglomerativeclustering', 'meanshift', 'spectralclustering',
                 'affinitypropagation', 'birch', 'optics', 'gaussianmixture', 'hdbscan'
             ]
         elif self.mode == "fast":
@@ -274,66 +280,81 @@ class ClustGridSearch:
         else:
             raise ValueError("Invalid mode. Use 'full' or 'fast'.")
 
-    def fit(self, X):
+    def fit(self, X, y=None):
         """
         Run clustering for all selected algorithms and return the best one based on the chosen scoring.
-        
-        :param X: Input data for clustering
+
+        :param X: Input data for clustering.
         """
-        for algorithm in self.algorithms:
+        results = []
+        for idx, algorithm in enumerate(self.algorithms):
             if self.verbose:
-                print(f"Testing algorithm: {algorithm}")
-            
-            optimizer = Optimizer(algorithm=algorithm, n_trials=20, scoring=self.scoring, verbose=self.verbose)
-            
-            start_time = time.time()
+                print(f"\nTesting algorithm: {algorithm}")
+
+            optimizer = Optimizer(
+                algorithm=algorithm,
+                n_trials=self.n_trials,
+                scoring=self.scoring,
+                verbose=self.verbose,
+                show_progress_bar=self.show_progress_bar
+            )
+
             try:
-                # Perform clustering
                 optimizer.fit(X)
-                labels = optimizer.labels_
-
-                # Calculate scores
-                sil_score = silhouette_score(X, labels)
-                ch_score = calinski_harabasz_score(X, labels)
-                db_score = -1 * davies_bouldin_score(X, labels)
-                
-                # Record clustering time and number of clusters
-                clustering_time = time.time() - start_time
-                n_clusters = len(np.unique(labels))
-
-                # Store results in cv_results_, including the fitted model
-                self.cv_results_.append({
+                score = optimizer.study.best_value
+                results.append({
                     'algorithm': algorithm,
-                    'silhouette_score': sil_score,
-                    'calinski_harabasz_score': ch_score,
-                    'davies_bouldin_score': db_score,
-                    'clustering_time': clustering_time,
-                    'n_clusters': n_clusters,
-                    'parameters': optimizer.best_params_,
-                    'model': optimizer  # Store the fitted model
+                    'mean_test_score': score,
+                    'params': optimizer.best_params_,
+                    'model': optimizer
                 })
-
-            except optuna.TrialPruned:
-                print(f"Trial pruned for algorithm: {algorithm}")
             except Exception as e:
-                print(f"Error for algorithm {algorithm}: {e}")
+                if self.verbose:
+                    print(f"Error for algorithm {algorithm}: {e}")
 
-        # Extract the best result from cv_results_
-        self._extract_best_result()
+        if not results:
+            raise ValueError("No algorithms produced valid results.")
 
-    def _extract_best_result(self):
-        """
-        Extract the best algorithm and its parameters from cv_results_ based on the chosen scoring metric.
-        """
-        if self.cv_results_:
-            best_result = max(self.cv_results_, key=lambda result: result[self.scoring])
-            self.best_algorithm_name = best_result['algorithm']
-            self.best_score_ = best_result[self.scoring]
-            self.best_params_ = best_result['parameters']
-            self.best_estimator_ = best_result['model']  # Retrieve the best fitted model
+        # Convert results to cv_results_ dict similar to scikit-learn's GridSearchCV
+        self.cv_results_ = {
+            'algorithm': [res['algorithm'] for res in results],
+            'mean_test_score': [res['mean_test_score'] for res in results],
+            'params': [res['params'] for res in results],
+            'model': [res['model'] for res in results],
+        }
 
-    def get_results(self):
-        """
-        Return a detailed list of results for all tested algorithms.
-        """
-        return self.cv_results_
+        # Determine best score and estimator
+        reverse = self.scoring != 'davies_bouldin_score'
+        scores = self.cv_results_['mean_test_score']
+        if reverse:
+            best_idx = np.argmax(scores)
+        else:
+            best_idx = np.argmin(scores)
+        self.best_index_ = best_idx
+        self.best_score_ = scores[best_idx]
+        self.best_params_ = self.cv_results_['params'][best_idx]
+        self.best_estimator_ = self.cv_results_['model'][best_idx]
+        return self
+
+    def predict(self, X):
+        return self.best_estimator_.predict(X)
+
+    def fit_predict(self, X, y=None):
+        self.fit(X, y)
+        return self.best_estimator_.labels_
+
+    @property
+    def labels_(self):
+        return self.best_estimator_.labels_
+
+    @property
+    def cluster_centers_(self):
+        return self.best_estimator_.cluster_centers_
+
+    @property
+    def centroids_(self):
+        return self.best_estimator_.centroids_
+
+    @property
+    def medoids_(self):
+        return self.best_estimator_.medoids_
