@@ -38,6 +38,8 @@ print("=" * 50)
 labels = clust_search.labels_
 medoids = clust_search.medoids_
 centroids = clust_search.centroids_
+modes = clust_search.modes_
+centers = clust_search.cluster_centers_
 
 print("\nLabels:")
 print(labels)
@@ -45,3 +47,7 @@ print("\nMedoids:")
 print(medoids)
 print("\nCentroids:")
 print(centroids)
+print("\nModes:")
+print(modes)
+print("\nCluster centers:")
+print(centers)

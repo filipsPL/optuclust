@@ -1,11 +1,12 @@
 import optuna
 import numpy as np
+from sklearn.neighbors import KernelDensity
 import time
 
 from sklearn.base import BaseEstimator, ClusterMixin
 from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
-from sklearn.cluster import (KMeans, MiniBatchKMeans, DBSCAN, AgglomerativeClustering, MeanShift,
-                             SpectralClustering, AffinityPropagation, Birch, OPTICS)
+from sklearn.cluster import (KMeans, MiniBatchKMeans, DBSCAN, AgglomerativeClustering, MeanShift, SpectralClustering, AffinityPropagation,
+                             Birch, OPTICS)
 from sklearn.mixture import GaussianMixture
 
 import hdbscan
@@ -14,6 +15,7 @@ from sklearn_som.som import SOM
 
 
 class Optimizer(BaseEstimator, ClusterMixin):
+
     def __init__(self, algorithm, n_trials=50, scoring='silhouette_score', verbose=False, show_progress_bar=True):
         self.algorithm = algorithm
         self.n_trials = n_trials
@@ -31,7 +33,7 @@ class Optimizer(BaseEstimator, ClusterMixin):
             optuna.logging.set_verbosity(optuna.logging.INFO if verbose else optuna.logging.WARNING)
         elif isinstance(verbose, int):
             optuna.logging.set_verbosity(verbose)
-        
+
     def fit(self, X, y=None):
         self.X_ = X  # Store X for later use
 
@@ -84,7 +86,7 @@ class Optimizer(BaseEstimator, ClusterMixin):
     def _suggest_model(self, trial, X):
         # Implement the parameter suggestions for each algorithm here
         # For brevity, only a couple of algorithms are shown
-            # KMeans
+        # KMeans
         if self.algorithm == 'kmeans':
             n_clusters = trial.suggest_int('n_clusters', 2, 50)
             max_iter = trial.suggest_int('max_iter', 100, 500)
@@ -104,13 +106,12 @@ class Optimizer(BaseEstimator, ClusterMixin):
             eps = trial.suggest_float('eps', 0.1, 10.0)
             min_samples = trial.suggest_int('min_samples', 2, 10)
             metric = trial.suggest_categorical('metric', ['euclidean', 'manhattan', 'chebyshev', 'minkowski'])
-            
+
             if metric == 'minkowski':
                 p = trial.suggest_int('p', 1, 5)  # Add power parameter for Minkowski distance
                 return DBSCAN(eps=eps, min_samples=min_samples, metric=metric, p=p)
             else:
                 return DBSCAN(eps=eps, min_samples=min_samples, metric=metric)
-
 
         # MeanShift
         elif self.algorithm == 'meanshift':
@@ -169,10 +170,10 @@ class Optimizer(BaseEstimator, ClusterMixin):
                                    min_samples=min_samples,
                                    cluster_selection_epsilon=cluster_selection_epsilon,
                                    allow_single_cluster=allow_single_cluster)
-        
+
         elif self.algorithm == 'kmedoids':
             n_clusters = trial.suggest_int('n_clusters', 2, 50)
-            method = trial.suggest_categorical('method', ['fasterpam',  "pam", "alternate", "fastermsc", "fastmsc", "pamsil", "pammedsil"])
+            method = trial.suggest_categorical('method', ['fasterpam', "pam", "alternate", "fastermsc", "fastmsc", "pamsil", "pammedsil"])
             return KMedoids(n_clusters=n_clusters, method=method, metric="euclidean")
 
         elif self.algorithm == 'som':
@@ -202,11 +203,14 @@ class Optimizer(BaseEstimator, ClusterMixin):
     def cluster_centers_(self):
         if hasattr(self.model, 'cluster_centers_'):
             return self.model.cluster_centers_
-        return None
+        else:
+            return None
 
     @property
     def centroids_(self):
-        # For algorithms that don't provide centroids directly
+        """
+        Calculate centroids for clusters, even if cluster_centers_ is not provided by the model.
+        """
         if hasattr(self.model, 'cluster_centers_'):
             return self.model.cluster_centers_
         elif self.labels_ is not None:
@@ -224,10 +228,12 @@ class Optimizer(BaseEstimator, ClusterMixin):
 
     @property
     def medoids_(self):
-        # For algorithms that don’t have medoids, calculate them if possible
+        """
+        Calculate medoids for clusters, even if medoids are not provided by the model.
+        """
         if isinstance(self.model, KMedoids):
             return self.model.cluster_centers_
-        elif self.labels_ is not None and len(np.unique(self.labels_)) > 0:
+        elif self.labels_ is not None:
             unique_labels = np.unique(self.labels_)
             medoids = []
             for label in unique_labels:
@@ -245,8 +251,38 @@ class Optimizer(BaseEstimator, ClusterMixin):
         else:
             return None
 
+    @property
+    def modes_(self):
+        """
+        Calculate modes for clusters using Kernel Density Estimation (KDE).
+        """
+        if self.labels_ is not None:
+            unique_labels = np.unique(self.labels_)
+            modes = []
+            for label in unique_labels:
+                if label == -1:  # Handle noise in clustering algorithms like DBSCAN
+                    continue
+                cluster_points = self.X_[self.labels_ == label]
+                if len(cluster_points) == 0:
+                    continue
+                # Fit Kernel Density Estimate for the cluster
+                kde = KernelDensity(kernel='gaussian', bandwidth=0.2).fit(cluster_points)
+                # Generate a grid of points to find the highest density
+                grid = np.linspace(cluster_points.min(axis=0), cluster_points.max(axis=0), 100)
+                grid_points = np.meshgrid(*[grid[:, i] for i in range(cluster_points.shape[1])])
+                grid_points = np.stack([gp.ravel() for gp in grid_points], axis=-1)
+                densities = kde.score_samples(grid_points)
+                # Find the mode (highest density point)
+                mode_index = np.argmax(densities)
+                mode = grid_points[mode_index]
+                modes.append(mode)
+            return np.array(modes)
+        else:
+            return None
+
 
 class ClustGridSearch(BaseEstimator, ClusterMixin):
+
     def __init__(self, mode='full', n_trials=20, scoring='silhouette_score', verbose=False, show_progress_bar=True):
         """
         Initialize the ClustGridSearch.
@@ -271,8 +307,7 @@ class ClustGridSearch(BaseEstimator, ClusterMixin):
         # Define algorithms to test based on mode
         if self.mode == "full":
             self.algorithms = [
-                'kmeans', 'kmedoids', 'minibatchkmeans', 'dbscan',
-                'agglomerativeclustering', 'meanshift', 'spectralclustering',
+                'kmeans', 'kmedoids', 'minibatchkmeans', 'dbscan', 'agglomerativeclustering', 'meanshift', 'spectralclustering',
                 'affinitypropagation', 'birch', 'optics', 'gaussianmixture', 'hdbscan'
             ]
         elif self.mode == "fast":
@@ -291,23 +326,16 @@ class ClustGridSearch(BaseEstimator, ClusterMixin):
             if self.verbose:
                 print(f"\nTesting algorithm: {algorithm}")
 
-            optimizer = Optimizer(
-                algorithm=algorithm,
-                n_trials=self.n_trials,
-                scoring=self.scoring,
-                verbose=self.verbose,
-                show_progress_bar=self.show_progress_bar
-            )
+            optimizer = Optimizer(algorithm=algorithm,
+                                  n_trials=self.n_trials,
+                                  scoring=self.scoring,
+                                  verbose=self.verbose,
+                                  show_progress_bar=self.show_progress_bar)
 
             try:
                 optimizer.fit(X)
                 score = optimizer.study.best_value
-                results.append({
-                    'algorithm': algorithm,
-                    'mean_test_score': score,
-                    'params': optimizer.best_params_,
-                    'model': optimizer
-                })
+                results.append({'algorithm': algorithm, 'mean_test_score': score, 'params': optimizer.best_params_, 'model': optimizer})
             except Exception as e:
                 if self.verbose:
                     print(f"Error for algorithm {algorithm}: {e}")
@@ -358,3 +386,7 @@ class ClustGridSearch(BaseEstimator, ClusterMixin):
     @property
     def medoids_(self):
         return self.best_estimator_.medoids_
+
+    @property
+    def modes_(self):
+        return self.best_estimator_.modes_
