@@ -7,6 +7,7 @@ from sklearn.cluster import AffinityPropagation, Birch, OPTICS
 from sklearn.mixture import GaussianMixture
 import hdbscan
 from kmedoids import KMedoids
+import time
 
 from sklearn_som.som import SOM
 
@@ -241,3 +242,98 @@ class Optimizer:
                 distances = np.sum(np.abs(cluster_points[:, np.newaxis] - cluster_points[np.newaxis, :]), axis=2)
                 medoids.append(cluster_points[np.argmin(np.sum(distances, axis=1))])
             return np.array(medoids)
+        
+
+class ClustGridSearch:
+    def __init__(self, mode="full", scoring="silhouette_score", verbose=False):
+        """
+        Initialize the ClustGridSearch.
+        
+        :param mode: 'full' to test all algorithms, 'fast' to test a subset (kmeans and hdbscan)
+        :param scoring: The metric used to select the best clustering (default: 'silhouette_score')
+        :param verbose: Whether to print additional information during the search
+        """
+        self.mode = mode
+        self.scoring = scoring
+        self.verbose = verbose
+        self.cv_results_ = []
+        self.best_estimator_ = None
+        self.best_score_ = None
+        self.best_algorithm_name = None
+        self.best_params_ = None
+        
+        # Define algorithms to test based on mode
+        if self.mode == "full":
+            self.algorithms = [
+                'som', 'kmeans', 'kmedoids', 'minibatchkmeans', 'dbscan', 
+                'agglomerativeclustering', 'meanshift', 'spectralclustering', 
+                'affinitypropagation', 'birch', 'optics', 'gaussianmixture', 'hdbscan'
+            ]
+        elif self.mode == "fast":
+            self.algorithms = ['kmeans', 'hdbscan']
+        else:
+            raise ValueError("Invalid mode. Use 'full' or 'fast'.")
+
+    def fit(self, X):
+        """
+        Run clustering for all selected algorithms and return the best one based on the chosen scoring.
+        
+        :param X: Input data for clustering
+        """
+        for algorithm in self.algorithms:
+            if self.verbose:
+                print(f"Testing algorithm: {algorithm}")
+            
+            optimizer = Optimizer(algorithm=algorithm, n_trials=20, scoring=self.scoring, verbose=self.verbose)
+            
+            start_time = time.time()
+            try:
+                # Perform clustering
+                optimizer.fit(X)
+                labels = optimizer.labels_
+
+                # Calculate scores
+                sil_score = silhouette_score(X, labels)
+                ch_score = calinski_harabasz_score(X, labels)
+                db_score = -1 * davies_bouldin_score(X, labels)
+                
+                # Record clustering time and number of clusters
+                clustering_time = time.time() - start_time
+                n_clusters = len(np.unique(labels))
+
+                # Store results in cv_results_, including the fitted model
+                self.cv_results_.append({
+                    'algorithm': algorithm,
+                    'silhouette_score': sil_score,
+                    'calinski_harabasz_score': ch_score,
+                    'davies_bouldin_score': db_score,
+                    'clustering_time': clustering_time,
+                    'n_clusters': n_clusters,
+                    'parameters': optimizer.best_params_,
+                    'model': optimizer  # Store the fitted model
+                })
+
+            except optuna.TrialPruned:
+                print(f"Trial pruned for algorithm: {algorithm}")
+            except Exception as e:
+                print(f"Error for algorithm {algorithm}: {e}")
+
+        # Extract the best result from cv_results_
+        self._extract_best_result()
+
+    def _extract_best_result(self):
+        """
+        Extract the best algorithm and its parameters from cv_results_ based on the chosen scoring metric.
+        """
+        if self.cv_results_:
+            best_result = max(self.cv_results_, key=lambda result: result[self.scoring])
+            self.best_algorithm_name = best_result['algorithm']
+            self.best_score_ = best_result[self.scoring]
+            self.best_params_ = best_result['parameters']
+            self.best_estimator_ = best_result['model']  # Retrieve the best fitted model
+
+    def get_results(self):
+        """
+        Return a detailed list of results for all tested algorithms.
+        """
+        return self.cv_results_

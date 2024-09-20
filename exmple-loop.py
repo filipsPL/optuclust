@@ -1,7 +1,7 @@
 import numpy as np
 from sklearn.datasets import make_blobs
 from sklearn.preprocessing import StandardScaler
-from optuclust import Optimizer  # Assuming your `Optimizer` class is in `optuclust.py`
+from optuclust import Optimizer
 
 # Create a sample dataset (blobs for clustering)
 X, _ = make_blobs(n_samples=300, centers=4, cluster_std=1.0, random_state=42)
