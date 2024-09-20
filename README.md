@@ -5,13 +5,13 @@
 ## Features
 
 - Optimize clustering parameters for various algorithms using **Optuna**.
-- Supports clustering methods:
-  - from scikit-learn
+- Supported clustering methods:
+  - from scikit-learn zoo, and
   - HDBSCAN
   - SOM
   - kMedoids
 - Provides centroids, medoids, and modes for clusters, even if the algorithm does not natively support these features.
-- Scoring functions: `silhouette_score`, `calinski_harabasz_score`, `-1 * davies_bouldin_score`.
+- Scoring functions: `silhouette_score`, `calinski_harabasz_score`, `-1 * davies_bouldin_score` (all to be maximized)
 - `ClustGridSearch` class to test all clustering algorithms and find the best one
   
 ## Installation
@@ -19,7 +19,7 @@
 1. Clone this repository:
 
    ```bash
-   git clone xxx
+   git clone git@github.com:filipsPL/optuclust.git
    ```
 
 2. Navigate to the cloned directory and install the required dependencies:
@@ -88,19 +88,13 @@ The benchmark will evaluate different clustering methods on various datasets and
 
 ## Supported Algorithms
 
-- KMeans
-- KMedoids
-- MiniBatchKMeans
-- DBSCAN
-- AgglomerativeClustering
-- MeanShift
-- SpectralClustering
-- AffinityPropagation
-- Birch
-- OPTICS
-- GaussianMixture
-- HDBSCAN
-- SOM
+```python
+algorithms = [
+    'som', 'kmeans', 'kmedoids', 'minibatchkmeans', 'dbscan', 'agglomerativeclustering',
+    'meanshift', 'spectralclustering', 'gaussianmixture', 'hdbscan',
+    'affinitypropagation', 'birch', 'optics', 
+]
+```
 
 ## Running Tests
 

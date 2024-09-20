@@ -8,23 +8,22 @@ X, _ = make_blobs(n_samples=300, centers=4, cluster_std=1.0, random_state=42)
 X = StandardScaler().fit_transform(X)
 
 # List of all algorithms to test
-algorithms = [ 'som',
-    'kmeans', 'kmedoids', 'minibatchkmeans', 'dbscan', 'agglomerativeclustering', 
-    'meanshift', 'spectralclustering', 'affinitypropagation', 'birch', 
-    'optics', 'gaussianmixture', 'hdbscan'
+algorithms = [
+    'som', 'kmeans', 'kmedoids', 'minibatchkmeans', 'dbscan', 'agglomerativeclustering', 'meanshift', 'spectralclustering',
+    'affinitypropagation', 'birch', 'optics', 'gaussianmixture', 'hdbscan'
 ]
 
 # Loop over each algorithm and run the Optimizer
 for algorithm in algorithms:
     print(f"Running Optimizer for {algorithm}")
-    
+
     # Instantiate the Optimizer
     optimizer = Optimizer(algorithm=algorithm, n_trials=140, scoring='silhouette_score', verbose=False)
-    
+
     # Fit the Optimizer to the data
     try:
         optimizer.fit(X)
-        
+
         # Print results
         print(f"Algorithm: {algorithm}")
         print(f"Best Parameters: {optimizer.best_params_}")
