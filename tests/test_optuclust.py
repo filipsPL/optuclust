@@ -1,0 +1,88 @@
+import pytest
+import numpy as np
+from optuclust import Optimizer
+from sklearn.datasets import make_blobs
+
+
+# Fixture to generate a synthetic dataset
+@pytest.fixture
+def data():
+    X, _ = make_blobs(n_samples=100, centers=3, n_features=2, random_state=42)
+    return X
+
+
+# Test for KMeans algorithm
+def test_kmeans(data):
+    optimizer = Optimizer(algorithm="kmeans", n_trials=10, verbose=False)
+    optimizer.fit(data)
+
+    assert optimizer.cluster_centers_ is not None, "KMeans should provide cluster centers"
+    assert optimizer.medoids_ is not None, "Medoids should be calculated for KMeans"
+    assert optimizer.modes_ is not None, "Modes should be calculated for KMeans"
+    assert optimizer.centroids_ is not None
+
+
+# Test for KMedoids algorithm
+def test_kmedoids(data):
+    optimizer = Optimizer(algorithm="kmedoids", n_trials=10, verbose=False)
+    optimizer.fit(data)
+
+    assert optimizer.cluster_centers_ is not None, "KMedoids should provide cluster centers (as medoids)"
+    assert optimizer.medoids_ is not None, "Medoids should be calculated for KMedoids"
+    assert optimizer.modes_ is not None, "Modes should be calculated for KMedoids"
+    assert optimizer.centroids_ is not None
+
+
+# Test for MiniBatchKMeans algorithm
+def test_minibatchkmeans(data):
+    optimizer = Optimizer(algorithm="minibatchkmeans", n_trials=10, verbose=False)
+    optimizer.fit(data)
+
+    assert optimizer.cluster_centers_ is not None, "MiniBatchKMeans should provide cluster centers"
+    assert optimizer.medoids_ is not None, "Medoids should be calculated for MiniBatchKMeans"
+    assert optimizer.modes_ is not None, "Modes should be calculated for MiniBatchKMeans"
+    assert optimizer.centroids_ is not None
+
+
+# Test for DBSCAN algorithm (should not provide cluster centers)
+def test_dbscan(data):
+    optimizer = Optimizer(algorithm="dbscan", n_trials=10, verbose=False)
+    optimizer.fit(data)
+
+    assert optimizer.cluster_centers_ is None, "DBSCAN should not provide cluster centers"
+    assert optimizer.medoids_ is not None, "Medoids should be calculated for DBSCAN"
+    assert optimizer.modes_ is not None, "Modes should be calculated for DBSCAN"
+    assert optimizer.centroids_ is not None
+
+
+# Test for MeanShift algorithm (which calculates cluster centers)
+def test_meanshift(data):
+    optimizer = Optimizer(algorithm="meanshift", n_trials=10, verbose=False)
+    optimizer.fit(data)
+
+    assert optimizer.cluster_centers_ is not None, "MeanShift should provide cluster centers (modes)"
+    assert optimizer.medoids_ is not None, "Medoids should be calculated for MeanShift"
+    assert optimizer.modes_ is not None, "Modes should be calculated for MeanShift"
+    assert optimizer.centroids_ is not None
+
+
+# Test for HDBSCAN algorithm
+def test_hdbscan(data):
+    optimizer = Optimizer(algorithm="hdbscan", n_trials=10, verbose=False)
+    optimizer.fit(data)
+
+    assert optimizer.cluster_centers_ is None, "HDBSCAN should not provide cluster centers"
+    assert optimizer.medoids_ is not None, "Medoids should be calculated for HDBSCAN"
+    assert optimizer.modes_ is not None, "Modes should be calculated for HDBSCAN"
+    assert optimizer.centroids_ is not None
+
+
+
+# Test for SOM algorithm
+def test_som(data):
+    optimizer = Optimizer(algorithm="som", n_trials=10, verbose=False)
+    optimizer.fit(data)
+
+    assert optimizer.medoids_ is not None, "Medoids should be calculated for SOM"
+    assert optimizer.modes_ is not None, "Modes should be calculated for SOM"
+    assert optimizer.centroids_ is not None

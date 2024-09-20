@@ -4,14 +4,14 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="optuml",
-    version="0.2.2",
+    name="optuclust",
+    version="0.0.1",
     author="Filip S.",
     author_email="filip.ursynow@gmail.com",
-    description="Hyperparameter optimization for multiple machine learning algorithms using Optuna, with Scikit-learn API",
+    description="Hyperparameter optimization for multiple clustering algorithms using Optuna, with Scikit-learn API",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/filipsPL/optuml",  # URL to the package's homepage (e.g., GitHub)
+    url="https://github.com/filipsPL/optuclust",
     packages=find_packages(),
     classifiers=[
         "Programming Language :: Python :: 3",
@@ -20,12 +20,13 @@ setup(
     ],
     python_requires=">=3.8",
     install_requires=[
-        "optuna>=3.0.1",
-        "scikit-learn",
-        "catboost",
-        "graphviz",   # Needed for CatBoost
-        "xgboost",
-        "numpy",
-        "wrapt_timeout_decorator"
+        "numpy>=1.21.0",
+        "scikit-learn>=1.0",
+        "hdbscan>=0.8.29",
+        "optuna>=3.0",
+        "kmedoids>=0.3.0",
+        "matplotlib>=3.4",
+        "pandas>=1.3",
+        "sklearn-som",
     ],
 )
