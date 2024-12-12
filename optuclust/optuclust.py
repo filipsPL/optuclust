@@ -69,13 +69,24 @@ class Optimizer(BaseEstimator, ClusterMixin):
             direction = 'minimize'
 
         self.study = optuna.create_study(direction=direction)
-        self.study.optimize(objective, n_trials=self.n_trials, show_progress_bar=self.show_progress_bar, timeout=self.timeout)
-        self.best_params_ = self.study.best_params
-        self.model = self._get_best_model(X)
-        self.model.fit(X)
+        try:
+            self.study.optimize(objective, n_trials=self.n_trials, show_progress_bar=self.show_progress_bar, timeout=self.timeout)
+            self.best_params_ = self.study.best_params
+            self.model = self._get_best_model(X)
+            self.model.fit(X)
 
-        # Store labels_
-        self.labels_ = self.model.labels_ if hasattr(self.model, 'labels_') else self.model.predict(X)
+            # Store labels_
+            self.labels_ = self.model.labels_ if hasattr(self.model, 'labels_') else self.model.predict(X)
+        except ValueError as e:
+            if "No trials are completed yet" in str(e):
+                if self.verbose:
+                    print("All trials were pruned. No valid results were obtained.")
+                self.best_params_ = None
+                self.model = None
+                self.labels_ = None
+            else:
+                raise e
+
         return self
 
     def fit_predict(self, X, y=None):
@@ -83,6 +94,8 @@ class Optimizer(BaseEstimator, ClusterMixin):
         return self.labels_
 
     def predict(self, X):
+        if self.model is None:
+            raise ValueError("No valid model available. Ensure that trials completed successfully.")
         return self.model.predict(X)
 
     def _compute_score(self, X, labels):
@@ -193,8 +206,10 @@ class Optimizer(BaseEstimator, ClusterMixin):
             return KMedoids(n_clusters=n_clusters, method=method, metric="euclidean")
 
         elif self.algorithm == 'sleep':
-            time.sleep(10)
-            return None
+            # fake algorithm to induce timeout
+            n_clusters = 3
+            time.sleep(3)
+            return KMeans(n_clusters=n_clusters, n_init="auto")  # n_init="auto"
 
         elif self.algorithm == 'som':
             m = trial.suggest_int('m', 2, 20)  # Grid height

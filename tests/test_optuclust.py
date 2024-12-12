@@ -101,15 +101,20 @@ def test_kmeans_timeout(data):
     assert elapsed_time <= 3.5, "Optimizer did not respect the timeout"
     # assert optimizer.cluster_centers_ is not None, "KMeans should provide cluster centers"
 
-# Test for KMeans algorithm
-def test_trial_timeout(data):
-    from time import time
+# Test for timeout - fake algorithm
+def test_trial_timeout1(data):
     optimizer = Optimizer(algorithm="sleep", trial_timeout=1, n_trials=2)
-    start_time = time()
     optimizer.fit(data)
-    elapsed_time = time() - start_time
-    print(f"Elapsed time: {elapsed_time}s")
-
     # Ensure the optimizer respects the timeout
     assert optimizer.cluster_centers_ is None, "KMeans should NOT provide cluster centers"
-    
+
+def test_trial_timeout10(data):
+    optimizer = Optimizer(algorithm="sleep", trial_timeout=10, n_trials=2)
+    optimizer.fit(data)
+    # Ensure the optimizer respects the timeout
+    # should NOT fail
+
+    assert optimizer.medoids_ is not None, "Medoids should be calculated for SOM"
+    assert optimizer.modes_ is not None, "Modes should be calculated for SOM"
+    assert optimizer.centroids_ is not None
+
