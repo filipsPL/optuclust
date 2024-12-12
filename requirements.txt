@@ -6,3 +6,4 @@ kmedoids>=0.3.0
 matplotlib>=3.4
 pandas>=1.3
 sklearn-som
+pytest
