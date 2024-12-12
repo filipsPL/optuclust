@@ -2,18 +2,22 @@
 
 **optuclust** is a Python module for optimizing clustering algorithms using the [Optuna](https://optuna.org/) framework. It provides support for a variety of clustering methods and offers additional capabilities such as the calculation of centroids, medoids, and modes for clusters.
 
+[![Python manual install](https://github.com/filipsPL/optuclust/actions/workflows/python-package.yml/badge.svg)](https://github.com/filipsPL/optuclust/actions/workflows/python-package.yml)
+
 ## Features
 
-- Optimize clustering parameters for various algorithms using **Optuna**.
-- Supported clustering methods:
-  - from scikit-learn zoo, and
-  - HDBSCAN
-  - SOM
-  - kMedoids
-- Provides centroids, medoids, and modes for clusters, even if the algorithm does not natively support these features.
-- Scoring functions: `silhouette_score`, `calinski_harabasz_score`, `-1 * davies_bouldin_score` (all to be maximized)
-- `ClustGridSearch` class to test all clustering algorithms and find the best one
-  
+- **Parameter Optimization:** Optimize clustering parameters for various algorithms using **Optuna**.
+- **Supported Clustering Methods:**
+  - Algorithms from scikit-learn, such as KMeans, DBSCAN, and Agglomerative Clustering.
+  - Advanced methods like HDBSCAN, Self-Organizing Maps (SOM), and kMedoids.
+- **Metrics and Scoring:**
+  - `silhouette_score`
+  - `calinski_harabasz_score`
+  - `-1 * davies_bouldin_score` (all scores are maximized for consistency).
+- **Clustering Insights:** Provides centroids, medoids, and modes for clusters, even if the algorithm does not natively support these features.
+- **ClustGridSearch Class:** A powerful utility to test all clustering algorithms and identify the best one.
+- **Timeout Management:** Separate timeouts for optimization runs (`timeout`) and individual trials (`trial_timeout`).
+
 ## Installation
 
 1. Clone this repository:
@@ -71,7 +75,7 @@ grid_search = ClustGridSearch(mode="full", scoring="silhouette_score", verbose=T
 
 # Fit and get the best method
 grid_search.fit(X)
-print("Best Algorithm:", grid_search.best_algorithm_name)
+print("Best Algorithm:", grid_search.best_estimator_.algorithm)
 print("Best Score:", grid_search.best_score_)
 print("Best Parameters:", grid_search.best_params_)
 ```
@@ -90,16 +94,38 @@ The benchmark will evaluate different clustering methods on various datasets and
 
 ```python
 algorithms = [
-    'som', 'kmeans', 'kmedoids', 'minibatchkmeans', 'dbscan', 'agglomerativeclustering',
+    'kmeans', 'kmedoids', 'minibatchkmeans', 'dbscan', 'agglomerativeclustering',
     'meanshift', 'spectralclustering', 'gaussianmixture', 'hdbscan',
-    'affinitypropagation', 'birch', 'optics', 
+    'affinitypropagation', 'birch', 'optics', 'som'
 ]
 ```
+
+## Parameters
+
+### Optimizer Class
+
+- **algorithm:** The clustering algorithm to optimize. Options include those listed in Supported Algorithms.
+- **n_trials:** Number of Optuna trials for optimization. Default is 50.
+- **scoring:** The metric to optimize. Options are `silhouette_score`, `calinski_harabasz_score`, and `-1 * davies_bouldin_score`.
+- **verbose:** Print additional logs if set to `True`.
+- **show_progress_bar:** Display a progress bar during optimization. Default is `True`.
+- **timeout:** Maximum duration (in seconds) for all trials in the optimization process.
+- **trial_timeout:** Maximum duration (in seconds) for each individual trial.
+
+### ClustGridSearch Class
+
+- **mode:**
+  - `full`: Test all algorithms.
+  - `fast`: Test a subset of algorithms (`kmeans` and `hdbscan`).
+- **n_trials:** Number of Optuna trials for each algorithm. Default is 20.
+- **scoring:** Metric to select the best clustering algorithm. Options are `silhouette_score`, `calinski_harabasz_score`, and `-1 * davies_bouldin_score`.
+- **verbose:** Print detailed logs if set to `True`.
+- **show_progress_bar:** Display a progress bar for each algorithm.
 
 ## Running Tests
 
 We use **pytest** for testing. To run tests, simply run:
 
 ```bash
-pytest
+pytest -v
 ```
