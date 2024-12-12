@@ -5,6 +5,7 @@ on:
     paths:
       - '**.py'
       - '.github/workflows/python-package.yml'
+      - 'requirements.txt'
     branches:
       - main
       - devel
