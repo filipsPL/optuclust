@@ -86,3 +86,30 @@ def test_som(data):
     assert optimizer.medoids_ is not None, "Medoids should be calculated for SOM"
     assert optimizer.modes_ is not None, "Modes should be calculated for SOM"
     assert optimizer.centroids_ is not None
+
+
+# Test for KMeans algorithm
+def test_kmeans_timeout(data):
+    from time import time
+    optimizer = Optimizer(algorithm="kmeans", timeout=3, n_trials=1000, verbose=False)
+    start_time = time()
+    optimizer.fit(data)
+    elapsed_time = time() - start_time
+    print(f"Elapsed time: {elapsed_time}s")
+
+    # Ensure the optimizer respects the timeout
+    assert elapsed_time <= 3.5, "Optimizer did not respect the timeout"
+    # assert optimizer.cluster_centers_ is not None, "KMeans should provide cluster centers"
+
+# Test for KMeans algorithm
+def test_trial_timeout(data):
+    from time import time
+    optimizer = Optimizer(algorithm="sleep", trial_timeout=1, n_trials=2)
+    start_time = time()
+    optimizer.fit(data)
+    elapsed_time = time() - start_time
+    print(f"Elapsed time: {elapsed_time}s")
+
+    # Ensure the optimizer respects the timeout
+    assert optimizer.cluster_centers_ is None, "KMeans should NOT provide cluster centers"
+    

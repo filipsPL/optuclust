@@ -12,16 +12,19 @@ from sklearn.mixture import GaussianMixture
 import hdbscan
 from kmedoids import KMedoids
 from sklearn_som.som import SOM
+import signal
 
 
 class Optimizer(BaseEstimator, ClusterMixin):
 
-    def __init__(self, algorithm, n_trials=50, scoring='silhouette_score', verbose=False, show_progress_bar=True):
+    def __init__(self, algorithm, n_trials=50, scoring='silhouette_score', verbose=False, show_progress_bar=True, timeout=None, trial_timeout=None):
         self.algorithm = algorithm
         self.n_trials = n_trials
         self.scoring = scoring
         self.verbose = verbose
         self.show_progress_bar = show_progress_bar
+        self.timeout = timeout
+        self.trial_timeout = trial_timeout
         self.best_params_ = None
         self.study = None
         self.model = None
@@ -37,14 +40,28 @@ class Optimizer(BaseEstimator, ClusterMixin):
     def fit(self, X, y=None):
         self.X_ = X  # Store X for later use
 
-        def objective(trial):
-            model = self._suggest_model(trial, X)
-            model.fit(X)
-            labels = model.labels_ if hasattr(model, 'labels_') else model.predict(X)
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Objective function timed out")
 
-            # Scoring logic, pass the trial object for pruning
-            score = self._compute_score(X, labels)
-            return score
+        def objective(trial):
+            if self.trial_timeout:
+                signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(int(self.trial_timeout))
+
+            try:
+                model = self._suggest_model(trial, X)
+                model.fit(X)
+                labels = model.labels_ if hasattr(model, 'labels_') else model.predict(X)
+
+                # Scoring logic, pass the trial object for pruning
+                score = self._compute_score(X, labels)
+                return score
+            except TimeoutError:
+                trial.report(float('-inf'), step=0)  # Report a very low score for the timeout trial
+                raise optuna.TrialPruned("Trial pruned due to timeout")
+            finally:
+                if self.trial_timeout:
+                    signal.alarm(0)
 
         # Determine direction of optimization
         direction = 'maximize'
@@ -52,7 +69,7 @@ class Optimizer(BaseEstimator, ClusterMixin):
             direction = 'minimize'
 
         self.study = optuna.create_study(direction=direction)
-        self.study.optimize(objective, n_trials=self.n_trials, show_progress_bar=self.show_progress_bar)
+        self.study.optimize(objective, n_trials=self.n_trials, show_progress_bar=self.show_progress_bar, timeout=self.timeout)
         self.best_params_ = self.study.best_params
         self.model = self._get_best_model(X)
         self.model.fit(X)
@@ -84,9 +101,8 @@ class Optimizer(BaseEstimator, ClusterMixin):
         return score
 
     def _suggest_model(self, trial, X):
-        # Implement the parameter suggestions for each algorithm here
-        # For brevity, only a couple of algorithms are shown
-        # KMeans
+
+        # kMeans
         if self.algorithm == 'kmeans':
             n_clusters = trial.suggest_int('n_clusters', 2, 50)
             max_iter = trial.suggest_int('max_iter', 100, 500)
@@ -175,6 +191,10 @@ class Optimizer(BaseEstimator, ClusterMixin):
             n_clusters = trial.suggest_int('n_clusters', 2, 50)
             method = trial.suggest_categorical('method', ['fasterpam', "pam", "alternate", "fastermsc", "fastmsc", "pamsil", "pammedsil"])
             return KMedoids(n_clusters=n_clusters, method=method, metric="euclidean")
+
+        elif self.algorithm == 'sleep':
+            time.sleep(10)
+            return None
 
         elif self.algorithm == 'som':
             m = trial.suggest_int('m', 2, 20)  # Grid height
