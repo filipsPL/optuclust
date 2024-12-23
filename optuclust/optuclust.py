@@ -17,7 +17,7 @@ import signal
 
 class Optimizer(BaseEstimator, ClusterMixin):
 
-    def __init__(self, algorithm, n_trials=50, scoring='silhouette_score', verbose=False, show_progress_bar=True, timeout=None, trial_timeout=None):
+    def __init__(self, algorithm, n_trials=50, scoring='silhouette_score', verbose=False, show_progress_bar=True, timeout=None, trial_timeout=None, storage=None):
         self.algorithm = algorithm
         self.n_trials = n_trials
         self.scoring = scoring
@@ -25,6 +25,7 @@ class Optimizer(BaseEstimator, ClusterMixin):
         self.show_progress_bar = show_progress_bar
         self.timeout = timeout
         self.trial_timeout = trial_timeout
+        self.storage = storage
         self.best_params_ = None
         self.study = None
         self.model = None
@@ -36,6 +37,11 @@ class Optimizer(BaseEstimator, ClusterMixin):
             optuna.logging.set_verbosity(optuna.logging.INFO if verbose else optuna.logging.WARNING)
         elif isinstance(verbose, int):
             optuna.logging.set_verbosity(verbose)
+
+        if storage == None:
+            storage = optuna.storages.InMemoryStorage()
+        self.study_name=f"study_{algorithm}_{scoring}"
+        print(f"Storage: {storage}, internal study name: {self.study_name}")
 
     def fit(self, X, y=None):
         self.X_ = X  # Store X for later use
@@ -68,8 +74,13 @@ class Optimizer(BaseEstimator, ClusterMixin):
         if self.scoring == 'davies_bouldin_score':
             direction = 'minimize'
 
-        self.study = optuna.create_study(direction=direction)
+        self.study = optuna.create_study(direction=direction, study_name = self.study_name, storage=self.storage, load_if_exists=True)
         try:
+            ile_prob = len(self.study.trials)
+            if ile_prob > 0:
+                print(f"Resuming optimization from storage, starting from trial {ile_prob}.")
+            else:
+                print("Starting a new optimization.")
             self.study.optimize(objective, n_trials=self.n_trials, show_progress_bar=self.show_progress_bar, timeout=self.timeout)
             self.best_params_ = self.study.best_params
             self.model = self._get_best_model(X)

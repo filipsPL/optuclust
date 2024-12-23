@@ -163,3 +163,4 @@ cython_debug/
 
 data/
 results/
+example-storage+resume.db
