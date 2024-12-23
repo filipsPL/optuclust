@@ -118,3 +118,37 @@ def test_trial_timeout10(data):
     assert optimizer.modes_ is not None, "Modes should be calculated for SOM"
     assert optimizer.centroids_ is not None
 
+# Test for storage and resume 
+def test_storage_and_resume(data):
+    storage_path = "test-storage+resume.db"
+    storage_uri = f"sqlite:///{storage_path}"
+    
+    import os
+
+    try:
+        # Run the optimizer
+        optimizer = Optimizer(algorithm="kmeans", n_trials=10, verbose=False, storage=storage_uri)
+        optimizer.fit(data)
+
+        # Assertions
+        assert optimizer.cluster_centers_ is not None, "KMeans should provide cluster centers"
+        assert optimizer.medoids_ is not None, "Medoids should be calculated for KMeans"
+        assert optimizer.modes_ is not None, "Modes should be calculated for KMeans"
+        assert optimizer.centroids_ is not None, "Centroids should be calculated for KMeans"
+        
+        # Run the optimizer again
+        optimizer = Optimizer(algorithm="kmeans", n_trials=10, verbose=False, storage=storage_uri)
+        optimizer.fit(data)
+
+        # Assertions
+        assert optimizer.cluster_centers_ is not None, "KMeans should provide cluster centers"
+        assert optimizer.medoids_ is not None, "Medoids should be calculated for KMeans"
+        assert optimizer.modes_ is not None, "Modes should be calculated for KMeans"
+        assert optimizer.centroids_ is not None, "Centroids should be calculated for KMeans"
+
+
+    finally:
+        # Remove the SQLite file after the test
+        if os.path.exists(storage_path):
+            os.remove(storage_path)
+
