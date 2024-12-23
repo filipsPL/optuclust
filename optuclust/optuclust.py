@@ -156,11 +156,11 @@ class Optimizer(BaseEstimator, ClusterMixin):
         try:
             ile_prob = len(self.study.trials)
             if ile_prob > 0:
-                print(
+                self.logger.info(
                     f"Resuming optimization from storage, starting from trial {ile_prob}."
                 )
             else:
-                print("Starting a new optimization.")
+                self.logger.info("Starting a new optimization.")
             self.study.optimize(
                 objective,
                 n_trials=self.n_trials,
@@ -169,6 +169,8 @@ class Optimizer(BaseEstimator, ClusterMixin):
                 callbacks=[self._progress_callback]
             )
             self.best_params_ = self.study.best_params
+            self.logger.info(f"Optimization completed. Best parameters: {self.best_params_}")
+
             self.model = self._get_best_model(X)
             self.model.fit(X)
 
@@ -178,14 +180,18 @@ class Optimizer(BaseEstimator, ClusterMixin):
                 if hasattr(self.model, "labels_")
                 else self.model.predict(X)
             )
+            
+            self.logger.info(f"Final model fitted. Number of clusters: {len(set(self.labels_))}")
+
         except ValueError as e:
             if "No trials are completed yet" in str(e):
                 if self.verbose:
-                    print("All trials were pruned. No valid results were obtained.")
+                    self.logger.error("All trials were pruned. No valid results were obtained.")
                 self.best_params_ = None
                 self.model = None
                 self.labels_ = None
             else:
+                self.logger.error(f"Error during optimization: {str(e)}")
                 raise e
 
         return self
@@ -387,7 +393,7 @@ class Optimizer(BaseEstimator, ClusterMixin):
     def _setup_logger(self):
         """Set up logging configuration"""
         logger = logging.getLogger(f'Optimizer_{self.algorithm}')
-        logger.setLevel(logging.INFO if self.verbose else logging.WARNING)
+        logger.setLevel(logging.INFO)
         
         # Clear any existing handlers
         logger.handlers = []
@@ -419,16 +425,9 @@ class Optimizer(BaseEstimator, ClusterMixin):
 
     def _progress_callback(self, study, trial):
         """Callback to report progress during optimization"""
-        if True: #self.verbose:
-            current_score = trial.value
-            best_score = study.best_value
-            self.logger.info(f"Trial {trial.number}: Score={current_score}, Best={best_score}")
-            
-            # Print current best parameters
-            if trial.number == study.best_trial.number:
-                self.logger.info("New best parameters found:")
-                for key, value in study.best_params.items():
-                    self.logger.info(f"  {key}: {value}")
+        current_score = trial.value
+        best_score = study.best_value
+        self.logger.info(f"Trial {trial.number}: Score={current_score}, Best={best_score}")
 
     @property
     def cluster_centers_(self):
@@ -583,7 +582,7 @@ class ClustGridSearch(BaseEstimator, ClusterMixin):
         results = []
         for idx, algorithm in enumerate(self.algorithms):
             if self.verbose:
-                print(f"\nTesting algorithm: {algorithm}")
+                self.logger.info(f"\nTesting algorithm: {algorithm}")
 
             optimizer = Optimizer(
                 algorithm=algorithm,
@@ -605,8 +604,7 @@ class ClustGridSearch(BaseEstimator, ClusterMixin):
                     }
                 )
             except Exception as e:
-                if self.verbose:
-                    print(f"Error for algorithm {algorithm}: {e}")
+                self.logger.error(f"Error for algorithm {algorithm}: {e}")
 
         if not results:
             raise ValueError("No algorithms produced valid results.")
