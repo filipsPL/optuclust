@@ -27,9 +27,6 @@ from kmedoids import KMedoids
 from sklearn_som.som import SOM
 import signal
 
-import logging
-from logging.handlers import RotatingFileHandler
-import sys
 
 class Optimizer(BaseEstimator, ClusterMixin):
 
@@ -92,15 +89,13 @@ class Optimizer(BaseEstimator, ClusterMixin):
         self.labels_ = None
         self.X_ = None  # Store X after fitting
         self.logfile = logfile
-        
-        self.logger = self._setup_logger()
 
         # Set Optuna logging verbosity based on 'verbose' parameter
         if isinstance(verbose, bool):
             optuna.logging.set_verbosity(
                 optuna.logging.INFO if verbose else optuna.logging.WARNING
             )
-            
+
             # don't show progress bar when verbose
             self.show_progress_bar = False
 
@@ -110,10 +105,54 @@ class Optimizer(BaseEstimator, ClusterMixin):
         if storage == None:
             storage = optuna.storages.InMemoryStorage()
         self.study_name = f"study_{algorithm}_{scoring}"
-        self.logger.info(f"Storage: {storage}, internal study name: {self.study_name}")
+        print(f"Storage: {storage}, internal study name: {self.study_name}")
 
     def fit(self, X, y=None):
         self.X_ = X  # Store X for later use
+
+        SAFE_DEFAULTS = {
+            "kmeans": {"n_clusters": 3, "max_iter": 300, "tol": 1e-4, "n_init": 10},
+            "minibatchkmeans": {
+                "n_clusters": 8,
+                "batch_size": 100,
+                "max_iter": 300,
+                "tol": 1e-4,
+                "n_init": 10,
+            },
+            "dbscan": {
+                "eps": 0.5,
+                "min_samples": 5,
+                "metric": "euclidean",
+                "p": 2,  # Minkowski parameter
+            },
+            "meanshift": {"bandwidth": 2.5, "bin_seeding": True},
+            "agglomerativeclustering": {"n_clusters": 3, "linkage": "ward"},
+            "spectralclustering": {
+                "n_clusters": 3,
+                "n_neighbors": 10,
+                "eigen_tol": 1e-4,
+            },
+            "affinitypropagation": {"damping": 0.9, "convergence_iter": 15},
+            "birch": {"n_clusters": 3, "threshold": 0.5, "branching_factor": 50},
+            "optics": {
+                "eps": None,  # None means auto-estimated threshold
+                "min_samples": 5,
+                "cluster_method": "xi",
+            },
+            "gaussianmixture": {"n_components": 3, "covariance_type": "full"},
+            "hdbscan": {
+                "min_cluster_size": 5,
+                "min_samples": 1,
+                "cluster_selection_epsilon": 0.0,
+                "allow_single_cluster": False,
+            },
+            "kmedoids": {"n_clusters": 3, "method": "pam", "metric": "euclidean"},
+            "som": {
+                "m": 10,  # Grid height
+                "n": 10,  # Grid width
+                "dim": None,  # Number of features in the data
+            },
+        }
 
         def timeout_handler(signum, frame):
             raise TimeoutError("Objective function timed out")
@@ -153,23 +192,30 @@ class Optimizer(BaseEstimator, ClusterMixin):
             storage=self.storage,
             load_if_exists=True,
         )
+
+        # Enqueue the default parameters for the chosen algorithm
+        # default_params = SAFE_DEFAULTS.get(self.algorithm)
+        # if default_params:
+        #     print(f"Enqueuing default parameters for {self.algorithm}: {default_params}")
+        #     self.study.enqueue_trial(default_params)
+
         try:
             ile_prob = len(self.study.trials)
             if ile_prob > 0:
-                self.logger.info(
+                print(
                     f"Resuming optimization from storage, starting from trial {ile_prob}."
                 )
             else:
-                self.logger.info("Starting a new optimization.")
+                print("Starting a new optimization.")
+
             self.study.optimize(
                 objective,
                 n_trials=self.n_trials,
                 show_progress_bar=self.show_progress_bar,
                 timeout=self.timeout,
-                callbacks=[self._progress_callback]
             )
             self.best_params_ = self.study.best_params
-            self.logger.info(f"Optimization completed. Best parameters: {self.best_params_}")
+            print(f"Optimization completed. Best parameters: {self.best_params_}")
 
             self.model = self._get_best_model(X)
             self.model.fit(X)
@@ -180,18 +226,17 @@ class Optimizer(BaseEstimator, ClusterMixin):
                 if hasattr(self.model, "labels_")
                 else self.model.predict(X)
             )
-            
-            self.logger.info(f"Final model fitted. Number of clusters: {len(set(self.labels_))}")
+            print(f"Final model fitted. Number of clusters: {len(set(self.labels_))}")
 
         except ValueError as e:
             if "No trials are completed yet" in str(e):
                 if self.verbose:
-                    self.logger.error("All trials were pruned. No valid results were obtained.")
+                    print("All trials were pruned. No valid results were obtained.")
                 self.best_params_ = None
                 self.model = None
                 self.labels_ = None
             else:
-                self.logger.error(f"Error during optimization: {str(e)}")
+                print(f"Error during optimization: {str(e)}")
                 raise e
 
         return self
@@ -392,14 +437,16 @@ class Optimizer(BaseEstimator, ClusterMixin):
 
     def _setup_logger(self):
         """Set up logging configuration"""
-        logger = logging.getLogger(f'Optimizer_{self.algorithm}')
-        logger.setLevel(logging.INFO)
-        
+        logger = logging.getLogger(f"Optimizer_{self.algorithm}")
+        logger.setLevel(logging.INFO if self.verbose else logging.WARNING)
+
         # Clear any existing handlers
         logger.handlers = []
 
         # Create formatter
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
 
         # Add console handler
         console_handler = logging.StreamHandler(sys.stdout)
@@ -410,24 +457,18 @@ class Optimizer(BaseEstimator, ClusterMixin):
         if self.logfile:
             try:
                 file_handler = RotatingFileHandler(
-                    self.logfile,
-                    maxBytes=10*1024*1024,  # 10MB
-                    backupCount=5
+                    self.logfile, maxBytes=10 * 1024 * 1024, backupCount=5  # 10MB
                 )
                 file_handler.setFormatter(formatter)
                 logger.addHandler(file_handler)
                 logger.info(f"Logging initiated. Log file: {self.logfile}")
             except Exception as e:
-                logger.error(f"Failed to set up file logging to {self.logfile}: {str(e)}")
+                logger.error(
+                    f"Failed to set up file logging to {self.logfile}: {str(e)}"
+                )
                 logger.info("Continuing with console logging only")
 
         return logger
-
-    def _progress_callback(self, study, trial):
-        """Callback to report progress during optimization"""
-        current_score = trial.value
-        best_score = study.best_value
-        self.logger.info(f"Trial {trial.number}: Score={current_score}, Best={best_score}")
 
     @property
     def cluster_centers_(self):
@@ -582,7 +623,7 @@ class ClustGridSearch(BaseEstimator, ClusterMixin):
         results = []
         for idx, algorithm in enumerate(self.algorithms):
             if self.verbose:
-                self.logger.info(f"\nTesting algorithm: {algorithm}")
+                print(f"\nTesting algorithm: {algorithm}")
 
             optimizer = Optimizer(
                 algorithm=algorithm,
@@ -604,7 +645,7 @@ class ClustGridSearch(BaseEstimator, ClusterMixin):
                     }
                 )
             except Exception as e:
-                self.logger.error(f"Error for algorithm {algorithm}: {e}")
+                print(f"Error for algorithm {algorithm}: {e}")
 
         if not results:
             raise ValueError("No algorithms produced valid results.")
