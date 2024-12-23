@@ -17,6 +17,7 @@
 - **Clustering Insights:** Provides centroids, medoids, and modes for clusters, even if the algorithm does not natively support these features.
 - **ClustGridSearch Class:** A powerful utility to test all clustering algorithms and identify the best one.
 - **Timeout Management:** Separate timeouts for optimization runs (`timeout`) and individual trials (`trial_timeout`).
+- **Storage and resume:** Store individual optimization results in sqlite database for future analysis, and resume optimization process later, if needed.
 
 ## Installation
 
@@ -111,6 +112,7 @@ algorithms = [
 - **show_progress_bar:** Display a progress bar during optimization. Default is `True`.
 - **timeout:** Maximum duration (in seconds) for all trials in the optimization process.
 - **trial_timeout:** Maximum duration (in seconds) for each individual trial.
+- **storage:** Storage object that optuna can use, eg `sqlite:///optimization.db`. This option imply attempt to resume optimization process if the storage is defined and exists.
 
 ### ClustGridSearch Class
 
