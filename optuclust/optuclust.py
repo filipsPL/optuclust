@@ -27,6 +27,9 @@ from kmedoids import KMedoids
 from sklearn_som.som import SOM
 import signal
 
+import logging
+from logging.handlers import RotatingFileHandler
+import sys
 
 class Optimizer(BaseEstimator, ClusterMixin):
 
@@ -64,6 +67,7 @@ class Optimizer(BaseEstimator, ClusterMixin):
         timeout=None,
         trial_timeout=None,
         storage=None,
+        logfile=None,
     ):
 
         # Parameter validation
@@ -87,19 +91,26 @@ class Optimizer(BaseEstimator, ClusterMixin):
         self.model = None
         self.labels_ = None
         self.X_ = None  # Store X after fitting
+        self.logfile = logfile
+        
+        self.logger = self._setup_logger()
 
         # Set Optuna logging verbosity based on 'verbose' parameter
         if isinstance(verbose, bool):
             optuna.logging.set_verbosity(
                 optuna.logging.INFO if verbose else optuna.logging.WARNING
             )
+            
+            # don't show progress bar when verbose
+            self.show_progress_bar = False
+
         elif isinstance(verbose, int):
             optuna.logging.set_verbosity(verbose)
 
         if storage == None:
             storage = optuna.storages.InMemoryStorage()
         self.study_name = f"study_{algorithm}_{scoring}"
-        print(f"Storage: {storage}, internal study name: {self.study_name}")
+        self.logger.info(f"Storage: {storage}, internal study name: {self.study_name}")
 
     def fit(self, X, y=None):
         self.X_ = X  # Store X for later use
@@ -155,6 +166,7 @@ class Optimizer(BaseEstimator, ClusterMixin):
                 n_trials=self.n_trials,
                 show_progress_bar=self.show_progress_bar,
                 timeout=self.timeout,
+                callbacks=[self._progress_callback]
             )
             self.best_params_ = self.study.best_params
             self.model = self._get_best_model(X)
@@ -371,6 +383,52 @@ class Optimizer(BaseEstimator, ClusterMixin):
         # Recreate the best model with optimized parameters
         trial = optuna.trial.FixedTrial(self.best_params_)
         return self._suggest_model(trial, X)
+
+    def _setup_logger(self):
+        """Set up logging configuration"""
+        logger = logging.getLogger(f'Optimizer_{self.algorithm}')
+        logger.setLevel(logging.INFO if self.verbose else logging.WARNING)
+        
+        # Clear any existing handlers
+        logger.handlers = []
+
+        # Create formatter
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+        # Add console handler
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+
+        # Add file handler if logfile is specified
+        if self.logfile:
+            try:
+                file_handler = RotatingFileHandler(
+                    self.logfile,
+                    maxBytes=10*1024*1024,  # 10MB
+                    backupCount=5
+                )
+                file_handler.setFormatter(formatter)
+                logger.addHandler(file_handler)
+                logger.info(f"Logging initiated. Log file: {self.logfile}")
+            except Exception as e:
+                logger.error(f"Failed to set up file logging to {self.logfile}: {str(e)}")
+                logger.info("Continuing with console logging only")
+
+        return logger
+
+    def _progress_callback(self, study, trial):
+        """Callback to report progress during optimization"""
+        if True: #self.verbose:
+            current_score = trial.value
+            best_score = study.best_value
+            self.logger.info(f"Trial {trial.number}: Score={current_score}, Best={best_score}")
+            
+            # Print current best parameters
+            if trial.number == study.best_trial.number:
+                self.logger.info("New best parameters found:")
+                for key, value in study.best_params.items():
+                    self.logger.info(f"  {key}: {value}")
 
     @property
     def cluster_centers_(self):
