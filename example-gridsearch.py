@@ -4,10 +4,10 @@ import numpy as np
 from sklearn.datasets import make_blobs
 
 # Generate sample data
-X, _ = make_blobs(n_samples=200, centers=4, cluster_std=0.60, random_state=0)
+X, _ = make_blobs(n_samples=200, centers=4, cluster_std=0.60, random_state=2024)
 
 # Create ClustGridSearch instance with 'full' mode
-clust_search = ClustGridSearch(mode='full', n_trials=10, scoring='silhouette_score', verbose=False)
+clust_search = ClustGridSearch(mode='full', n_trials=10, scoring='silhouette_score', verbose=True)
 
 # Fit the ClustGridSearch to the data
 clust_search.fit(X)
