@@ -152,3 +152,19 @@ def test_storage_and_resume(data):
         if os.path.exists(storage_path):
             os.remove(storage_path)
 
+
+
+def test_invalid_algorithm(data):
+    try:
+        optimizer = Optimizer(algorithm="kmeans_dupa", n_trials=10, verbose=False)
+        optimizer.fit(data)
+    except ValueError as err:
+        assert hasattr(err, '__cause__')
+
+
+def test_invalid_scoring(data):
+    try:
+        optimizer = Optimizer(algorithm="kmeans", scoring="filips_score", n_trials=10, verbose=False)
+        optimizer.fit(data)
+    except ValueError as err:
+        assert hasattr(err, '__cause__')
