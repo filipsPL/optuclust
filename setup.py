@@ -15,10 +15,11 @@ setup(
     packages=find_packages(),
     classifiers=[
         "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: MIT License",
+        # "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
     python_requires=">=3.8",
+    license="MIT", 
     install_requires=[
         "numpy>=1.21.0",
         "scikit-learn>=1.1",
