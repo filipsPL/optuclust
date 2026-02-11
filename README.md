@@ -1,6 +1,6 @@
 # optuclust
 
-**optuclust** is a Python module for optimizing clustering algorithms using the [Optuna](https://optuna.org/) framework. It provides support for a variety of clustering methods and offers additional capabilities such as the calculation of centroids, medoids, and modes for clusters.
+**optuclust** is a Python module for optimizing clustering algorithms using the [Optuna](https://optuna.org/) framework. It provides a scikit-learn compatible API with support for a variety of clustering methods and offers additional capabilities such as the calculation of centroids, medoids, and modes for clusters.
 
 [![Python manual install](https://github.com/filipsPL/optuclust/actions/workflows/python-package.yml/badge.svg)](https://github.com/filipsPL/optuclust/actions/workflows/python-package.yml)
 
@@ -13,11 +13,13 @@
 - **Metrics and Scoring:**
   - `silhouette_score`
   - `calinski_harabasz_score`
-  - `-1 * davies_bouldin_score` (all scores are maximized for consistency).
-- **Clustering Insights:** Provides centroids, medoids, and modes for clusters, even if the algorithm does not natively support these features.
-- **ClustGridSearch Class:** A powerful utility to test all clustering algorithms and identify the best one.
+  - `davies_bouldin_score` (automatically minimized)
+  - Noise points (label=-1) are filtered out before score computation for density-based algorithms.
+- **Clustering Insights:** Provides centroids (arithmetic mean), medoids (Euclidean), and modes (KDE with Scott's bandwidth) for clusters, even if the algorithm does not natively support these features. All descriptors are computed eagerly during `fit()` and work in any number of dimensions.
+- **Scikit-learn Compatible:** Inherits from `BaseEstimator` and `ClusterMixin`. Works with `clone()`, `check_is_fitted()`, and scikit-learn pipelines.
+- **ClustGridSearch Class:** A utility to test all clustering algorithms and identify the best one.
 - **Timeout Management:** Separate timeouts for optimization runs (`timeout`) and individual trials (`trial_timeout`).
-- **Storage and resume:** Store individual optimization results in sqlite database for future analysis, and resume optimization process later, if needed.
+- **Storage and Resume:** Store optimization results in a SQLite database for future analysis, and resume the optimization process later.
 
 ## Installation
 
@@ -40,6 +42,8 @@
    python setup.py install
    ```
 
+**Requires:** Python >= 3.8, scikit-learn >= 1.1
+
 ## Usage
 
 ### 1. Optimizing a Clustering Algorithm
@@ -60,6 +64,7 @@ print("Cluster Labels:", optimizer.labels_)
 print("Centroids:", optimizer.centroids_)
 print("Medoids:", optimizer.medoids_)
 print("Modes:", optimizer.modes_)
+print("Cluster Centers (native):", optimizer.cluster_centers_)
 ```
 
 ### 2. ClustGridSearch
@@ -101,18 +106,34 @@ algorithms = [
 ]
 ```
 
+**Note:** Not all algorithms support `predict()` on new data. Algorithms with inductive prediction: `kmeans`, `minibatchkmeans`, `meanshift`, `birch`, `gaussianmixture`, `kmedoids`, `som`. Calling `predict()` on other algorithms (e.g. `dbscan`, `hdbscan`) will raise a `TypeError`.
+
 ## Parameters
 
 ### Optimizer Class
 
 - **algorithm:** The clustering algorithm to optimize. Options include those listed in Supported Algorithms.
 - **n_trials:** Number of Optuna trials for optimization. Default is 50.
-- **scoring:** The metric to optimize. Options are `silhouette_score`, `calinski_harabasz_score`, and `-1 * davies_bouldin_score`.
-- **verbose:** Print additional logs if set to `True`.
+- **scoring:** The metric to optimize. Options are `silhouette_score`, `calinski_harabasz_score`, and `davies_bouldin_score`.
+- **verbose:** Enable additional logging if set to `True`. Can also be an `int` to set Optuna's verbosity level directly.
 - **show_progress_bar:** Display a progress bar during optimization. Default is `True`.
 - **timeout:** Maximum duration (in seconds) for all trials in the optimization process.
-- **trial_timeout:** Maximum duration (in seconds) for each individual trial.
-- **storage:** Storage object that optuna can use, eg `sqlite:///optimization.db`. This option imply attempt to resume optimization process if the storage is defined and exists.
+- **trial_timeout:** Maximum duration (in seconds) for each individual trial (Unix only, uses `SIGALRM`).
+- **storage:** Optuna storage URI, e.g. `sqlite:///optimization.db`. When provided, enables resuming a previous optimization run.
+- **logfile:** Reserved for future use.
+
+### Fitted Attributes
+
+After calling `fit(X)`:
+
+- **labels\_:** Cluster labels for each sample.
+- **best\_params\_:** Dictionary of the best hyperparameters found.
+- **model\_:** The fitted clustering model with the best parameters.
+- **study\_:** The Optuna `Study` object with full trial history.
+- **centroids\_:** Arithmetic mean of each cluster (excludes noise points).
+- **medoids\_:** Most central data point in each cluster (Euclidean distance).
+- **modes\_:** Highest density point in each cluster (KDE with Scott's rule bandwidth).
+- **cluster\_centers\_:** Native cluster centers from the model (if available), otherwise `None`.
 
 ### ClustGridSearch Class
 
@@ -120,8 +141,8 @@ algorithms = [
   - `full`: Test all algorithms.
   - `fast`: Test a subset of algorithms (`kmeans` and `hdbscan`).
 - **n_trials:** Number of Optuna trials for each algorithm. Default is 20.
-- **scoring:** Metric to select the best clustering algorithm. Options are `silhouette_score`, `calinski_harabasz_score`, and `-1 * davies_bouldin_score`.
-- **verbose:** Print detailed logs if set to `True`.
+- **scoring:** Metric to select the best clustering algorithm. Options are `silhouette_score`, `calinski_harabasz_score`, and `davies_bouldin_score`.
+- **verbose:** Enable detailed logging if set to `True`.
 - **show_progress_bar:** Display a progress bar for each algorithm.
 
 ## Running Tests

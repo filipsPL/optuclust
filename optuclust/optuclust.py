@@ -1,36 +1,39 @@
-import optuna
-import numpy as np
-from sklearn.neighbors import KernelDensity
+import logging
+import signal
 import time
 
+import numpy as np
+import optuna
 from sklearn.base import BaseEstimator, ClusterMixin
+from sklearn.cluster import (
+    DBSCAN,
+    OPTICS,
+    AffinityPropagation,
+    AgglomerativeClustering,
+    Birch,
+    KMeans,
+    MeanShift,
+    MiniBatchKMeans,
+    SpectralClustering,
+)
 from sklearn.metrics import (
-    silhouette_score,
     calinski_harabasz_score,
     davies_bouldin_score,
-)
-from sklearn.cluster import (
-    KMeans,
-    MiniBatchKMeans,
-    DBSCAN,
-    AgglomerativeClustering,
-    MeanShift,
-    SpectralClustering,
-    AffinityPropagation,
-    Birch,
-    OPTICS,
+    silhouette_score,
 )
 from sklearn.mixture import GaussianMixture
+from sklearn.neighbors import KernelDensity
+from sklearn.utils.validation import check_is_fitted
 
 import hdbscan
 from kmedoids import KMedoids
 from sklearn_som.som import SOM
-import signal
+
+logger = logging.getLogger("optuclust")
 
 
 class Optimizer(BaseEstimator, ClusterMixin):
 
-    # List of valid algorithms and scoring metrics
     VALID_ALGORITHMS = [
         "kmeans",
         "minibatchkmeans",
@@ -54,6 +57,60 @@ class Optimizer(BaseEstimator, ClusterMixin):
         "davies_bouldin_score",
     ]
 
+    ALGORITHMS_WITH_PREDICT = {
+        "kmeans",
+        "minibatchkmeans",
+        "meanshift",
+        "birch",
+        "gaussianmixture",
+        "kmedoids",
+        "som",
+        "sleep",
+    }
+
+    SAFE_DEFAULTS = {
+        "kmeans": {"n_clusters": 3, "max_iter": 300, "tol": 1e-4, "n_init": 10},
+        "minibatchkmeans": {
+            "n_clusters": 8,
+            "batch_size": 100,
+            "max_iter": 300,
+            "tol": 1e-4,
+            "n_init": 10,
+        },
+        "dbscan": {
+            "eps": 0.5,
+            "min_samples": 5,
+            "metric": "euclidean",
+            "p": 2,
+        },
+        "meanshift": {"bandwidth": 2.5, "bin_seeding": True},
+        "agglomerativeclustering": {"n_clusters": 3, "linkage": "ward"},
+        "spectralclustering": {
+            "n_clusters": 3,
+            "n_neighbors": 10,
+            "eigen_tol": 1e-4,
+        },
+        "affinitypropagation": {"damping": 0.9, "convergence_iter": 15},
+        "birch": {"n_clusters": 3, "threshold": 0.5, "branching_factor": 50},
+        "optics": {
+            "min_samples": 5,
+            "cluster_method": "xi",
+        },
+        "gaussianmixture": {"n_components": 3, "covariance_type": "full"},
+        "hdbscan": {
+            "min_cluster_size": 5,
+            "min_samples": 1,
+            "cluster_selection_epsilon": 0.0,
+            "allow_single_cluster": False,
+        },
+        "kmedoids": {"n_clusters": 3, "method": "pam", "metric": "euclidean"},
+        "som": {
+            "m": 10,
+            "n": 10,
+            "dim": None,
+        },
+    }
+
     def __init__(
         self,
         algorithm,
@@ -66,8 +123,6 @@ class Optimizer(BaseEstimator, ClusterMixin):
         storage=None,
         logfile=None,
     ):
-
-        # Parameter validation
         if algorithm not in self.VALID_ALGORITHMS:
             raise ValueError(f"Algorithm must be one of {self.VALID_ALGORITHMS}")
         if scoring not in self.VALID_SCORING:
@@ -83,76 +138,28 @@ class Optimizer(BaseEstimator, ClusterMixin):
         self.timeout = timeout
         self.trial_timeout = trial_timeout
         self.storage = storage
-        self.best_params_ = None
-        self.study = None
-        self.model = None
-        self.labels_ = None
-        self.X_ = None  # Store X after fitting
         self.logfile = logfile
 
-        # Set Optuna logging verbosity based on 'verbose' parameter
-        if isinstance(verbose, bool):
-            optuna.logging.set_verbosity(
-                optuna.logging.INFO if verbose else optuna.logging.WARNING
-            )
-
-            # don't show progress bar when verbose
-            self.show_progress_bar = False
-
-        elif isinstance(verbose, int):
-            optuna.logging.set_verbosity(verbose)
-
-        if storage == None:
-            storage = optuna.storages.InMemoryStorage()
-        self.study_name = f"study_{algorithm}_{scoring}"
-        print(f"Storage: {storage}, internal study name: {self.study_name}")
-
     def fit(self, X, y=None):
-        self.X_ = X  # Store X for later use
+        # Configure optuna verbosity locally
+        if isinstance(self.verbose, bool):
+            optuna.logging.set_verbosity(
+                optuna.logging.INFO if self.verbose else optuna.logging.WARNING
+            )
+            _show_progress_bar = self.show_progress_bar if not self.verbose else False
+        elif isinstance(self.verbose, int):
+            optuna.logging.set_verbosity(self.verbose)
+            _show_progress_bar = self.show_progress_bar
+        else:
+            _show_progress_bar = self.show_progress_bar
 
-        SAFE_DEFAULTS = {
-            "kmeans": {"n_clusters": 3, "max_iter": 300, "tol": 1e-4, "n_init": 10},
-            "minibatchkmeans": {
-                "n_clusters": 8,
-                "batch_size": 100,
-                "max_iter": 300,
-                "tol": 1e-4,
-                "n_init": 10,
-            },
-            "dbscan": {
-                "eps": 0.5,
-                "min_samples": 5,
-                "metric": "euclidean",
-                "p": 2,  # Minkowski parameter
-            },
-            "meanshift": {"bandwidth": 2.5, "bin_seeding": True},
-            "agglomerativeclustering": {"n_clusters": 3, "linkage": "ward"},
-            "spectralclustering": {
-                "n_clusters": 3,
-                "n_neighbors": 10,
-                "eigen_tol": 1e-4,
-            },
-            "affinitypropagation": {"damping": 0.9, "convergence_iter": 15},
-            "birch": {"n_clusters": 3, "threshold": 0.5, "branching_factor": 50},
-            "optics": {
-                "eps": None,  # None means auto-estimated threshold
-                "min_samples": 5,
-                "cluster_method": "xi",
-            },
-            "gaussianmixture": {"n_components": 3, "covariance_type": "full"},
-            "hdbscan": {
-                "min_cluster_size": 5,
-                "min_samples": 1,
-                "cluster_selection_epsilon": 0.0,
-                "allow_single_cluster": False,
-            },
-            "kmedoids": {"n_clusters": 3, "method": "pam", "metric": "euclidean"},
-            "som": {
-                "m": 10,  # Grid height
-                "n": 10,  # Grid width
-                "dim": None,  # Number of features in the data
-            },
-        }
+        # Resolve storage
+        storage = self.storage
+        if storage is None:
+            storage = optuna.storages.InMemoryStorage()
+
+        study_name = f"study_{self.algorithm}_{self.scoring}"
+        logger.info("Storage: %s, internal study name: %s", storage, study_name)
 
         def timeout_handler(signum, frame):
             raise TimeoutError("Objective function timed out")
@@ -168,14 +175,10 @@ class Optimizer(BaseEstimator, ClusterMixin):
                 labels = (
                     model.labels_ if hasattr(model, "labels_") else model.predict(X)
                 )
-
-                # Scoring logic, pass the trial object for pruning
                 score = self._compute_score(X, labels)
                 return score
             except TimeoutError:
-                trial.report(
-                    float("-inf"), step=0
-                )  # Report a very low score for the timeout trial
+                trial.report(float("-inf"), step=0)
                 raise optuna.TrialPruned("Trial pruned due to timeout")
             finally:
                 if self.trial_timeout:
@@ -186,58 +189,66 @@ class Optimizer(BaseEstimator, ClusterMixin):
         if self.scoring == "davies_bouldin_score":
             direction = "minimize"
 
-        self.study = optuna.create_study(
+        self.study_ = optuna.create_study(
             direction=direction,
-            study_name=self.study_name,
-            storage=self.storage,
+            study_name=study_name,
+            storage=storage,
             load_if_exists=True,
         )
 
-        # Enqueue the default parameters for the chosen algorithm
-        # default_params = SAFE_DEFAULTS.get(self.algorithm)
-        # if default_params:
-        #     print(f"Enqueuing default parameters for {self.algorithm}: {default_params}")
-        #     self.study.enqueue_trial(default_params)
-
         try:
-            ile_prob = len(self.study.trials)
-            if ile_prob > 0:
-                print(
-                    f"Resuming optimization from storage, starting from trial {ile_prob}."
+            n_existing = len(self.study_.trials)
+            if n_existing > 0:
+                logger.info(
+                    "Resuming optimization from storage, starting from trial %d.",
+                    n_existing,
                 )
             else:
-                print("Starting a new optimization.")
+                logger.info("Starting a new optimization.")
 
-            self.study.optimize(
+            self.study_.optimize(
                 objective,
                 n_trials=self.n_trials,
-                show_progress_bar=self.show_progress_bar,
+                show_progress_bar=_show_progress_bar,
                 timeout=self.timeout,
             )
-            self.best_params_ = self.study.best_params
-            print(f"Optimization completed. Best parameters: {self.best_params_}")
-
-            self.model = self._get_best_model(X)
-            self.model.fit(X)
-
-            # Store labels_
-            self.labels_ = (
-                self.model.labels_
-                if hasattr(self.model, "labels_")
-                else self.model.predict(X)
+            self.best_params_ = self.study_.best_params
+            logger.info(
+                "Optimization completed. Best parameters: %s", self.best_params_
             )
-            print(f"Final model fitted. Number of clusters: {len(set(self.labels_))}")
+
+            self.model_ = self._get_best_model(X)
+            self.model_.fit(X)
+
+            self.labels_ = (
+                self.model_.labels_
+                if hasattr(self.model_, "labels_")
+                else self.model_.predict(X)
+            )
+            logger.info(
+                "Final model fitted. Number of clusters: %d",
+                len(set(self.labels_)),
+            )
+
+            # Eagerly compute cluster descriptors
+            self.centroids_ = self._compute_centroids(X)
+            self.medoids_ = self._compute_medoids(X)
+            self.modes_ = self._compute_modes(X)
 
         except ValueError as e:
             if "No trials are completed yet" in str(e):
-                if self.verbose:
-                    print("All trials were pruned. No valid results were obtained.")
+                logger.warning(
+                    "All trials were pruned. No valid results were obtained."
+                )
                 self.best_params_ = None
-                self.model = None
+                self.model_ = None
                 self.labels_ = None
+                self.centroids_ = None
+                self.medoids_ = None
+                self.modes_ = None
             else:
-                print(f"Error during optimization: {str(e)}")
-                raise e
+                logger.error("Error during optimization: %s", str(e))
+                raise
 
         return self
 
@@ -246,39 +257,50 @@ class Optimizer(BaseEstimator, ClusterMixin):
         return self.labels_
 
     def predict(self, X):
-        if self.model is None:
+        check_is_fitted(self)
+        if self.model_ is None:
             raise ValueError(
                 "No valid model available. Ensure that trials completed successfully."
             )
-        return self.model.predict(X)
+        if self.algorithm not in self.ALGORITHMS_WITH_PREDICT:
+            raise TypeError(
+                f"Algorithm '{self.algorithm}' does not support predict(). "
+                f"Algorithms with predict: {sorted(self.ALGORITHMS_WITH_PREDICT)}"
+            )
+        return self.model_.predict(X)
 
     def _compute_score(self, X, labels):
-        # Prune if there is only one cluster
-        if len(set(labels)) <= 1:
-            raise optuna.TrialPruned("Only one cluster found, pruning this trial.")
+        # Filter out noise points for all metrics
+        mask = labels != -1
+        non_noise_labels = labels[mask]
+
+        if len(set(non_noise_labels)) <= 1:
+            raise optuna.TrialPruned(
+                "Only one cluster found (excluding noise), pruning this trial."
+            )
+
+        X_filtered = X[mask]
 
         if self.scoring == "silhouette_score":
-            score = silhouette_score(X, labels)
+            score = silhouette_score(X_filtered, non_noise_labels)
         elif self.scoring == "calinski_harabasz_score":
-            score = calinski_harabasz_score(X, labels)
+            score = calinski_harabasz_score(X_filtered, non_noise_labels)
         elif self.scoring == "davies_bouldin_score":
-            score = davies_bouldin_score(X, labels)  # For minimization
+            score = davies_bouldin_score(X_filtered, non_noise_labels)
         else:
             raise ValueError(f"Unsupported scoring method: {self.scoring}")
         return score
 
     def _suggest_model(self, trial, X):
 
-        # kMeans
         if self.algorithm == "kmeans":
             n_clusters = trial.suggest_int("n_clusters", 2, 50)
             max_iter = trial.suggest_int("max_iter", 100, 500)
             tol = trial.suggest_float("tol", 1e-6, 1e-2)
             return KMeans(
                 n_clusters=n_clusters, max_iter=max_iter, tol=tol, n_init="auto"
-            )  # n_init="auto"
+            )
 
-        # MiniBatchKMeans
         elif self.algorithm == "minibatchkmeans":
             n_clusters = trial.suggest_int("n_clusters", 2, 50)
             batch_size = trial.suggest_int("batch_size", 10, 200)
@@ -290,31 +312,25 @@ class Optimizer(BaseEstimator, ClusterMixin):
                 max_iter=max_iter,
                 tol=tol,
                 n_init="auto",
-            )  # n_init="auto"
+            )
 
-        # DBSCAN
         elif self.algorithm == "dbscan":
             eps = trial.suggest_float("eps", 0.1, 10.0)
             min_samples = trial.suggest_int("min_samples", 2, 10)
             metric = trial.suggest_categorical(
                 "metric", ["euclidean", "manhattan", "chebyshev", "minkowski"]
             )
-
             if metric == "minkowski":
-                p = trial.suggest_int(
-                    "p", 1, 5
-                )  # Add power parameter for Minkowski distance
+                p = trial.suggest_int("p", 1, 5)
                 return DBSCAN(eps=eps, min_samples=min_samples, metric=metric, p=p)
             else:
                 return DBSCAN(eps=eps, min_samples=min_samples, metric=metric)
 
-        # MeanShift
         elif self.algorithm == "meanshift":
             bandwidth = trial.suggest_float("bandwidth", 0.1, 10.0)
             bin_seeding = trial.suggest_categorical("bin_seeding", [True, False])
             return MeanShift(bandwidth=bandwidth, bin_seeding=bin_seeding)
 
-        # AgglomerativeClustering
         elif self.algorithm == "agglomerativeclustering":
             n_clusters = trial.suggest_int("n_clusters", 2, 50)
             linkage = trial.suggest_categorical(
@@ -322,7 +338,6 @@ class Optimizer(BaseEstimator, ClusterMixin):
             )
             return AgglomerativeClustering(n_clusters=n_clusters, linkage=linkage)
 
-        # SpectralClustering
         elif self.algorithm == "spectralclustering":
             n_clusters = trial.suggest_int("n_clusters", 2, 50)
             n_neighbors = trial.suggest_int("n_neighbors", 2, 20)
@@ -331,7 +346,6 @@ class Optimizer(BaseEstimator, ClusterMixin):
                 n_clusters=n_clusters, n_neighbors=n_neighbors, eigen_tol=eigen_tol
             )
 
-        # AffinityPropagation
         elif self.algorithm == "affinitypropagation":
             damping = trial.suggest_float("damping", 0.5, 0.99)
             convergence_iter = trial.suggest_int("convergence_iter", 10, 200)
@@ -339,7 +353,6 @@ class Optimizer(BaseEstimator, ClusterMixin):
                 damping=damping, convergence_iter=convergence_iter
             )
 
-        # Birch
         elif self.algorithm == "birch":
             n_clusters = trial.suggest_int("n_clusters", 2, 50)
             threshold = trial.suggest_float("threshold", 0.1, 1.0)
@@ -350,18 +363,17 @@ class Optimizer(BaseEstimator, ClusterMixin):
                 branching_factor=branching_factor,
             )
 
-        # OPTICS
         elif self.algorithm == "optics":
-            eps = trial.suggest_float("eps", 0.1, 10.0)
             min_samples = trial.suggest_int("min_samples", 2, 10)
             cluster_method = trial.suggest_categorical(
                 "cluster_method", ["xi", "dbscan"]
             )
             return OPTICS(
-                eps=eps, min_samples=min_samples, cluster_method=cluster_method
+                max_eps=np.inf,
+                min_samples=min_samples,
+                cluster_method=cluster_method,
             )
 
-        # GaussianMixture
         elif self.algorithm == "gaussianmixture":
             n_components = trial.suggest_int("n_components", 2, 10)
             covariance_type = trial.suggest_categorical(
@@ -371,18 +383,15 @@ class Optimizer(BaseEstimator, ClusterMixin):
                 n_components=n_components, covariance_type=covariance_type
             )
 
-        # HDBSCAN
         elif self.algorithm == "hdbscan":
             min_cluster_size = trial.suggest_int("min_cluster_size", 2, 50)
             min_samples = trial.suggest_int("min_samples", 1, 10)
-
             cluster_selection_epsilon = trial.suggest_float(
                 "cluster_selection_epsilon", 0, 1
             )
             allow_single_cluster = trial.suggest_categorical(
                 "allow_single_cluster", [True, False]
             )
-            # metric = trial.suggest_categorical('metric', ['euclidean', 'manhattan', 'chebyshev', 'minkowski'])
             return hdbscan.HDBSCAN(
                 min_cluster_size=min_cluster_size,
                 min_samples=min_samples,
@@ -407,160 +416,93 @@ class Optimizer(BaseEstimator, ClusterMixin):
             return KMedoids(n_clusters=n_clusters, method=method, metric="euclidean")
 
         elif self.algorithm == "sleep":
-            # fake algorithm to induce timeout
-            n_clusters = 3
+            # Fake algorithm to induce timeout for testing
             time.sleep(3)
-            return KMeans(n_clusters=n_clusters, n_init="auto")  # n_init="auto"
+            return KMeans(n_clusters=3, n_init="auto")
 
         elif self.algorithm == "som":
-            m = trial.suggest_int("m", 2, 20)  # Grid height
-            n = trial.suggest_int("n", 2, 20)  # Grid width
-
-            # Initialize SOM
-            som = SOM(m=m, n=n, dim=X.shape[1])
-
-            # Train SOM
-            som.fit(X)
-
-            # Generate labels (assign each datapoint to its predicted cluster)
-            labels = som.predict(X)
-            self._labels = labels  # Use internal variable instead of labels_ property
-            return som  # Return the trained SOM model
+            m = trial.suggest_int("m", 2, 20)
+            n = trial.suggest_int("n", 2, 20)
+            return SOM(m=m, n=n, dim=X.shape[1])
 
         else:
             raise ValueError(f"Unsupported algorithm: {self.algorithm}")
 
     def _get_best_model(self, X):
-        # Recreate the best model with optimized parameters
-        trial = optuna.trial.FixedTrial(self.best_params_)
+        params = dict(self.best_params_)
+        # Remove conditional parameters that don't apply
+        if self.algorithm == "dbscan" and params.get("metric") != "minkowski":
+            params.pop("p", None)
+        trial = optuna.trial.FixedTrial(params)
         return self._suggest_model(trial, X)
 
-    def _setup_logger(self):
-        """Set up logging configuration"""
-        logger = logging.getLogger(f"Optimizer_{self.algorithm}")
-        logger.setLevel(logging.INFO if self.verbose else logging.WARNING)
+    def _compute_centroids(self, X):
+        """Compute arithmetic mean centroid for each cluster."""
+        if self.labels_ is None:
+            return None
+        unique_labels = np.unique(self.labels_)
+        centroids = []
+        for label in unique_labels:
+            if label == -1:
+                continue
+            cluster_points = X[self.labels_ == label]
+            centroids.append(cluster_points.mean(axis=0))
+        if len(centroids) == 0:
+            return None
+        return np.array(centroids)
 
-        # Clear any existing handlers
-        logger.handlers = []
+    def _compute_medoids(self, X):
+        """Compute medoid (point with minimum total squared Euclidean distance) for each cluster."""
+        if self.labels_ is None:
+            return None
+        unique_labels = np.unique(self.labels_)
+        medoids = []
+        for label in unique_labels:
+            if label == -1:
+                continue
+            cluster_points = X[self.labels_ == label]
+            if len(cluster_points) == 0:
+                continue
+            # Squared Euclidean pairwise distances
+            distances = np.sum(
+                (cluster_points[:, np.newaxis] - cluster_points[np.newaxis, :]) ** 2,
+                axis=2,
+            )
+            medoid_index = np.argmin(np.sum(distances, axis=1))
+            medoids.append(cluster_points[medoid_index])
+        if len(medoids) == 0:
+            return None
+        return np.array(medoids)
 
-        # Create formatter
-        formatter = logging.Formatter(
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-        )
-
-        # Add console handler
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setFormatter(formatter)
-        logger.addHandler(console_handler)
-
-        # Add file handler if logfile is specified
-        if self.logfile:
-            try:
-                file_handler = RotatingFileHandler(
-                    self.logfile, maxBytes=10 * 1024 * 1024, backupCount=5  # 10MB
-                )
-                file_handler.setFormatter(formatter)
-                logger.addHandler(file_handler)
-                logger.info(f"Logging initiated. Log file: {self.logfile}")
-            except Exception as e:
-                logger.error(
-                    f"Failed to set up file logging to {self.logfile}: {str(e)}"
-                )
-                logger.info("Continuing with console logging only")
-
-        return logger
+    def _compute_modes(self, X):
+        """Compute mode (highest density point) for each cluster using KDE."""
+        if self.labels_ is None:
+            return None
+        unique_labels = np.unique(self.labels_)
+        modes = []
+        for label in unique_labels:
+            if label == -1:
+                continue
+            cluster_points = X[self.labels_ == label]
+            if len(cluster_points) == 0:
+                continue
+            kde = KernelDensity(kernel="gaussian", bandwidth="scott").fit(
+                cluster_points
+            )
+            # Evaluate density at actual data points instead of exponential grid
+            densities = kde.score_samples(cluster_points)
+            mode_index = np.argmax(densities)
+            modes.append(cluster_points[mode_index])
+        if len(modes) == 0:
+            return None
+        return np.array(modes)
 
     @property
     def cluster_centers_(self):
-        if hasattr(self.model, "cluster_centers_"):
-            return self.model.cluster_centers_
-        else:
-            return None
-
-    @property
-    def centroids_(self):
-        """
-        Calculate centroids for clusters, even if cluster_centers_ is not provided by the model.
-        """
-        if hasattr(self.model, "cluster_centers_"):
-            return self.model.cluster_centers_
-        elif self.labels_ is not None:
-            unique_labels = np.unique(self.labels_)
-            centroids = []
-            for label in unique_labels:
-                if label == -1:  # Handle noise in clustering algorithms like DBSCAN
-                    continue
-                cluster_points = self.X_[self.labels_ == label]
-                centroid = cluster_points.mean(axis=0)
-                centroids.append(centroid)
-            return np.array(centroids)
-        else:
-            return None
-
-    @property
-    def medoids_(self):
-        """
-        Calculate medoids for clusters, even if medoids are not provided by the model.
-        """
-        if isinstance(self.model, KMedoids):
-            return self.model.cluster_centers_
-        elif self.labels_ is not None:
-            unique_labels = np.unique(self.labels_)
-            medoids = []
-            for label in unique_labels:
-                if label == -1:  # Handle noise in clustering algorithms like DBSCAN
-                    continue
-                cluster_points = self.X_[self.labels_ == label]
-                if len(cluster_points) == 0:
-                    continue
-                # Compute pairwise distances
-                distances = np.sum(
-                    np.abs(
-                        cluster_points[:, np.newaxis] - cluster_points[np.newaxis, :]
-                    ),
-                    axis=2,
-                )
-                # Find the index of the point with minimal total distance to other points
-                medoid_index = np.argmin(np.sum(distances, axis=1))
-                medoids.append(cluster_points[medoid_index])
-            return np.array(medoids)
-        else:
-            return None
-
-    @property
-    def modes_(self):
-        """
-        Calculate modes for clusters using Kernel Density Estimation (KDE).
-        """
-        if self.labels_ is not None:
-            unique_labels = np.unique(self.labels_)
-            modes = []
-            for label in unique_labels:
-                if label == -1:  # Handle noise in clustering algorithms like DBSCAN
-                    continue
-                cluster_points = self.X_[self.labels_ == label]
-                if len(cluster_points) == 0:
-                    continue
-                # Fit Kernel Density Estimate for the cluster
-                kde = KernelDensity(kernel="gaussian", bandwidth=0.2).fit(
-                    cluster_points
-                )
-                # Generate a grid of points to find the highest density
-                grid = np.linspace(
-                    cluster_points.min(axis=0), cluster_points.max(axis=0), 100
-                )
-                grid_points = np.meshgrid(
-                    *[grid[:, i] for i in range(cluster_points.shape[1])]
-                )
-                grid_points = np.stack([gp.ravel() for gp in grid_points], axis=-1)
-                densities = kde.score_samples(grid_points)
-                # Find the mode (highest density point)
-                mode_index = np.argmax(densities)
-                mode = grid_points[mode_index]
-                modes.append(mode)
-            return np.array(modes)
-        else:
-            return None
+        check_is_fitted(self)
+        if self.model_ is not None and hasattr(self.model_, "cluster_centers_"):
+            return self.model_.cluster_centers_
+        return None
 
 
 class ClustGridSearch(BaseEstimator, ClusterMixin):
@@ -587,13 +529,6 @@ class ClustGridSearch(BaseEstimator, ClusterMixin):
         self.verbose = verbose
         self.show_progress_bar = show_progress_bar
 
-        self.cv_results_ = {}
-        self.best_estimator_ = None
-        self.best_score_ = None
-        self.best_params_ = None
-        self.best_index_ = None
-
-        # Define algorithms to test based on mode
         if self.mode == "full":
             self.algorithms = [
                 "kmeans",
@@ -621,9 +556,8 @@ class ClustGridSearch(BaseEstimator, ClusterMixin):
         :param X: Input data for clustering.
         """
         results = []
-        for idx, algorithm in enumerate(self.algorithms):
-            if self.verbose:
-                print(f"\nTesting algorithm: {algorithm}")
+        for algorithm in self.algorithms:
+            logger.info("Testing algorithm: %s", algorithm)
 
             optimizer = Optimizer(
                 algorithm=algorithm,
@@ -635,7 +569,7 @@ class ClustGridSearch(BaseEstimator, ClusterMixin):
 
             try:
                 optimizer.fit(X)
-                score = optimizer.study.best_value
+                score = optimizer.study_.best_value
                 results.append(
                     {
                         "algorithm": algorithm,
@@ -645,12 +579,11 @@ class ClustGridSearch(BaseEstimator, ClusterMixin):
                     }
                 )
             except Exception as e:
-                print(f"Error for algorithm {algorithm}: {e}")
+                logger.error("Error for algorithm %s: %s", algorithm, e)
 
         if not results:
             raise ValueError("No algorithms produced valid results.")
 
-        # Convert results to cv_results_ dict similar to scikit-learn's GridSearchCV
         self.cv_results_ = {
             "algorithm": [res["algorithm"] for res in results],
             "mean_test_score": [res["mean_test_score"] for res in results],
@@ -658,7 +591,6 @@ class ClustGridSearch(BaseEstimator, ClusterMixin):
             "model": [res["model"] for res in results],
         }
 
-        # Determine best score and estimator
         reverse = self.scoring != "davies_bouldin_score"
         scores = self.cv_results_["mean_test_score"]
         if reverse:
@@ -672,6 +604,7 @@ class ClustGridSearch(BaseEstimator, ClusterMixin):
         return self
 
     def predict(self, X):
+        check_is_fitted(self)
         return self.best_estimator_.predict(X)
 
     def fit_predict(self, X, y=None):
@@ -680,20 +613,25 @@ class ClustGridSearch(BaseEstimator, ClusterMixin):
 
     @property
     def labels_(self):
+        check_is_fitted(self)
         return self.best_estimator_.labels_
 
     @property
     def cluster_centers_(self):
+        check_is_fitted(self)
         return self.best_estimator_.cluster_centers_
 
     @property
     def centroids_(self):
+        check_is_fitted(self)
         return self.best_estimator_.centroids_
 
     @property
     def medoids_(self):
+        check_is_fitted(self)
         return self.best_estimator_.medoids_
 
     @property
     def modes_(self):
+        check_is_fitted(self)
         return self.best_estimator_.modes_
