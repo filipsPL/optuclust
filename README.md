@@ -2,7 +2,7 @@
 
 **optuclust** is a Python module for optimizing clustering algorithms using the [Optuna](https://optuna.org/) framework. It provides a scikit-learn compatible API with support for a variety of clustering methods and offers additional capabilities such as the calculation of centroids, medoids, and modes for clusters.
 
-[![Python manual install](https://github.com/filipsPL/optuclust/actions/workflows/python-package.yml/badge.svg)](https://github.com/filipsPL/optuclust/actions/workflows/python-package.yml)
+[![Python manual install](https://github.com/filipsPL/optuclust/actions/workflows/python-package.yml/badge.svg)](https://github.com/filipsPL/optuclust/actions/workflows/python-package.yml) [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18608559.svg)](https://doi.org/10.5281/zenodo.18608559)
 
 ## Features
 

@@ -1,0 +1,31 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: >-
+  OptuClust - Python module for optimizing clustering algorithms using the Optuna
+type: dataset
+authors:
+  - orcid: "https://orcid.org/0000-0001-5758-9416"
+    given-names: Filip Stefaniak
+    affiliation: >-
+      International Institute of Molecular and Cell
+      Biology in Warsaw, Warsaw, Poland
+    email: fstefaniak@iimcb.gov.pl
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.18608559
+    description: Zenodo repository
+abstract: >-
+  OptuClust is a Python module designed to optimize clustering algorithms using the
+  Optuna framework. It provides a flexible and efficient way to find the best
+  hyperparameters for various clustering algorithms, such as K-Means, DBSCAN, and
+  Agglomerative Clustering. By leveraging Optuna's powerful optimization capabilities,
+  OptuClust helps users achieve better clustering results and improve the performance of
+  their machine learning models.
+keywords:
+  - clustering
+  - optimization
+  - machine learning
+  - hyperparameter tuning
+license: CC0-1.0
