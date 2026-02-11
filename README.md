@@ -23,6 +23,12 @@
 
 ## Installation
 
+### The easiest method - with `pip`
+
+`pip install optuclust`
+
+### From repository
+
 1. Clone this repository:
 
    ```bash
