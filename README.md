@@ -51,7 +51,7 @@
    python setup.py install
    ```
 
-**Requires:** Python >= 3.8, scikit-learn >= 1.1
+**Requires:** Python >= 3.8, scikit-learn >= 1.4
 
 ## Usage
 

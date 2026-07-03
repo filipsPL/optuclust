@@ -22,7 +22,7 @@ setup(
     license="MIT", 
     install_requires=[
         "numpy>=1.21.0",
-        "scikit-learn>=1.1",
+        "scikit-learn>=1.4",
         "hdbscan>=0.8.29",
         "optuna>=3.0",
         "kmedoids>=0.3.0",

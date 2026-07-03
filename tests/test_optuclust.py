@@ -3,7 +3,7 @@ import numpy as np
 from sklearn.exceptions import NotFittedError
 from sklearn.datasets import make_blobs
 
-from optuclust import Optimizer
+from optuclust import Optimizer, ClustGridSearch
 
 
 # Fixture to generate a synthetic dataset
@@ -150,13 +150,18 @@ def test_storage_and_resume(data):
 
 
 def test_invalid_algorithm(data):
+    # Per sklearn convention, __init__ only stores params; validation happens in fit().
+    optimizer = Optimizer(algorithm="kmeans_dupa", n_trials=10, verbose=False)
     with pytest.raises(ValueError, match="Algorithm must be one of"):
-        Optimizer(algorithm="kmeans_dupa", n_trials=10, verbose=False)
+        optimizer.fit(data)
 
 
 def test_invalid_scoring(data):
+    optimizer = Optimizer(
+        algorithm="kmeans", scoring="filips_score", n_trials=10, verbose=False
+    )
     with pytest.raises(ValueError, match="Scoring must be one of"):
-        Optimizer(algorithm="kmeans", scoring="filips_score", n_trials=10, verbose=False)
+        optimizer.fit(data)
 
 
 def test_not_fitted_error():
@@ -170,3 +175,31 @@ def test_predict_unsupported_algorithm(data):
     optimizer.fit(data)
     with pytest.raises(TypeError, match="does not support predict"):
         optimizer.predict(data)
+
+
+def test_predict_wrong_number_of_features(data):
+    optimizer = Optimizer(algorithm="kmeans", n_trials=10, verbose=False)
+    optimizer.fit(data)
+    with pytest.raises(ValueError, match="features"):
+        optimizer.predict(data[:, :1])
+
+
+def test_fit_accepts_dataframe(data):
+    pd = pytest.importorskip("pandas")
+    df = pd.DataFrame(data, columns=["a", "b"])
+    optimizer = Optimizer(algorithm="kmeans", n_trials=10, verbose=False)
+    optimizer.fit(df)
+    _assert_cluster_descriptors(optimizer, data, expect_cluster_centers=True)
+
+
+def test_grid_search_set_params_updates_algorithms(data):
+    grid_search = ClustGridSearch(mode="full", n_trials=5, show_progress_bar=False)
+    grid_search.set_params(mode="fast")
+    grid_search.fit(data)
+    assert grid_search.algorithms_ == ["kmeans", "hdbscan"]
+
+
+def test_grid_search_invalid_mode(data):
+    grid_search = ClustGridSearch(mode="bogus", n_trials=5, show_progress_bar=False)
+    with pytest.raises(ValueError, match="Invalid mode"):
+        grid_search.fit(data)

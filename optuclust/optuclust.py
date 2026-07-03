@@ -23,7 +23,7 @@ from sklearn.metrics import (
 )
 from sklearn.mixture import GaussianMixture
 from sklearn.neighbors import KernelDensity
-from sklearn.utils.validation import check_is_fitted
+from sklearn.utils.validation import check_array, check_is_fitted
 
 import hdbscan
 from kmedoids import KMedoids
@@ -123,13 +123,6 @@ class Optimizer(BaseEstimator, ClusterMixin):
         storage=None,
         logfile=None,
     ):
-        if algorithm not in self.VALID_ALGORITHMS:
-            raise ValueError(f"Algorithm must be one of {self.VALID_ALGORITHMS}")
-        if scoring not in self.VALID_SCORING:
-            raise ValueError(f"Scoring must be one of {self.VALID_SCORING}")
-        if not isinstance(n_trials, int) or n_trials <= 0:
-            raise ValueError("n_trials must be a positive integer")
-
         self.algorithm = algorithm
         self.n_trials = n_trials
         self.scoring = scoring
@@ -140,7 +133,19 @@ class Optimizer(BaseEstimator, ClusterMixin):
         self.storage = storage
         self.logfile = logfile
 
+    def _validate_params(self):
+        if self.algorithm not in self.VALID_ALGORITHMS:
+            raise ValueError(f"Algorithm must be one of {self.VALID_ALGORITHMS}")
+        if self.scoring not in self.VALID_SCORING:
+            raise ValueError(f"Scoring must be one of {self.VALID_SCORING}")
+        if not isinstance(self.n_trials, int) or self.n_trials <= 0:
+            raise ValueError("n_trials must be a positive integer")
+
     def fit(self, X, y=None):
+        self._validate_params()
+        X = check_array(X)
+        self.n_features_in_ = X.shape[1]
+
         # Configure optuna verbosity locally
         if isinstance(self.verbose, bool):
             optuna.logging.set_verbosity(
@@ -166,7 +171,6 @@ class Optimizer(BaseEstimator, ClusterMixin):
 
         def objective(trial):
             if self.trial_timeout:
-                signal.signal(signal.SIGALRM, timeout_handler)
                 signal.alarm(int(self.trial_timeout))
 
             try:
@@ -196,59 +200,68 @@ class Optimizer(BaseEstimator, ClusterMixin):
             load_if_exists=True,
         )
 
-        try:
-            n_existing = len(self.study_.trials)
-            if n_existing > 0:
-                logger.info(
-                    "Resuming optimization from storage, starting from trial %d.",
-                    n_existing,
-                )
-            else:
-                logger.info("Starting a new optimization.")
+        n_existing = len(self.study_.trials)
+        if n_existing > 0:
+            logger.info(
+                "Resuming optimization from storage, starting from trial %d.",
+                n_existing,
+            )
+        else:
+            logger.info("Starting a new optimization.")
 
+        old_handler = None
+        if self.trial_timeout:
+            old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+
+        try:
             self.study_.optimize(
                 objective,
                 n_trials=self.n_trials,
                 show_progress_bar=_show_progress_bar,
                 timeout=self.timeout,
             )
-            self.best_params_ = self.study_.best_params
-            logger.info(
-                "Optimization completed. Best parameters: %s", self.best_params_
-            )
+        finally:
+            if old_handler is not None:
+                signal.signal(signal.SIGALRM, old_handler)
 
-            self.model_ = self._get_best_model(X)
-            self.model_.fit(X)
+        completed_trials = [
+            t
+            for t in self.study_.trials
+            if t.state == optuna.trial.TrialState.COMPLETE
+        ]
 
-            self.labels_ = (
-                self.model_.labels_
-                if hasattr(self.model_, "labels_")
-                else self.model_.predict(X)
-            )
-            logger.info(
-                "Final model fitted. Number of clusters: %d",
-                len(set(self.labels_)),
-            )
+        if not completed_trials:
+            logger.warning("All trials were pruned. No valid results were obtained.")
+            self.best_params_ = None
+            self.model_ = None
+            self.labels_ = None
+            self.centroids_ = None
+            self.medoids_ = None
+            self.modes_ = None
+            return self
 
-            # Eagerly compute cluster descriptors
-            self.centroids_ = self._compute_centroids(X)
-            self.medoids_ = self._compute_medoids(X)
-            self.modes_ = self._compute_modes(X)
+        self.best_params_ = self.study_.best_params
+        logger.info(
+            "Optimization completed. Best parameters: %s", self.best_params_
+        )
 
-        except ValueError as e:
-            if "No trials are completed yet" in str(e):
-                logger.warning(
-                    "All trials were pruned. No valid results were obtained."
-                )
-                self.best_params_ = None
-                self.model_ = None
-                self.labels_ = None
-                self.centroids_ = None
-                self.medoids_ = None
-                self.modes_ = None
-            else:
-                logger.error("Error during optimization: %s", str(e))
-                raise
+        self.model_ = self._get_best_model(X)
+        self.model_.fit(X)
+
+        self.labels_ = (
+            self.model_.labels_
+            if hasattr(self.model_, "labels_")
+            else self.model_.predict(X)
+        )
+        logger.info(
+            "Final model fitted. Number of clusters: %d",
+            len(set(self.labels_)),
+        )
+
+        # Eagerly compute cluster descriptors
+        self.centroids_ = self._compute_centroids(X)
+        self.medoids_ = self._compute_medoids(X)
+        self.modes_ = self._compute_modes(X)
 
         return self
 
@@ -258,6 +271,12 @@ class Optimizer(BaseEstimator, ClusterMixin):
 
     def predict(self, X):
         check_is_fitted(self)
+        X = check_array(X)
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError(
+                f"X has {X.shape[1]} features, but {self.__class__.__name__} "
+                f"is expecting {self.n_features_in_} features as input."
+            )
         if self.model_ is None:
             raise ValueError(
                 "No valid model available. Ensure that trials completed successfully."
@@ -529,8 +548,14 @@ class ClustGridSearch(BaseEstimator, ClusterMixin):
         self.verbose = verbose
         self.show_progress_bar = show_progress_bar
 
+    def fit(self, X, y=None):
+        """
+        Run clustering for all selected algorithms and return the best one based on the chosen scoring.
+
+        :param X: Input data for clustering.
+        """
         if self.mode == "full":
-            self.algorithms = [
+            algorithms = [
                 "kmeans",
                 "kmedoids",
                 "minibatchkmeans",
@@ -545,18 +570,13 @@ class ClustGridSearch(BaseEstimator, ClusterMixin):
                 "hdbscan",
             ]
         elif self.mode == "fast":
-            self.algorithms = ["kmeans", "hdbscan"]
+            algorithms = ["kmeans", "hdbscan"]
         else:
             raise ValueError("Invalid mode. Use 'full' or 'fast'.")
+        self.algorithms_ = algorithms
 
-    def fit(self, X, y=None):
-        """
-        Run clustering for all selected algorithms and return the best one based on the chosen scoring.
-
-        :param X: Input data for clustering.
-        """
         results = []
-        for algorithm in self.algorithms:
+        for algorithm in algorithms:
             logger.info("Testing algorithm: %s", algorithm)
 
             optimizer = Optimizer(
