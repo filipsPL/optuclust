@@ -108,17 +108,35 @@ def test_kmeans_timeout(data):
     assert elapsed_time <= 5.0, "Optimizer did not respect the timeout"
 
 
+@pytest.fixture
+def slow_algorithm(monkeypatch):
+    """Make every trial artificially slow, to exercise trial_timeout.
+
+    There is no "sleep" algorithm in the public API (VALID_ALGORITHMS) -
+    it's purely a test concern, so it's injected here via monkeypatching
+    rather than baked into the library.
+    """
+    from sklearn.cluster import KMeans
+    import time
+
+    def _slow_suggest_model(self, trial, X):
+        time.sleep(3)
+        return KMeans(n_clusters=3, n_init="auto")
+
+    monkeypatch.setattr(Optimizer, "_suggest_model", _slow_suggest_model)
+
+
 # Test per-trial timeout (should prune the sleeping trial)
-def test_trial_timeout1(data):
-    optimizer = Optimizer(algorithm="sleep", trial_timeout=1, n_trials=2)
+def test_trial_timeout1(data, slow_algorithm):
+    optimizer = Optimizer(algorithm="kmeans", trial_timeout=1, n_trials=2)
     optimizer.fit(data)
     # All trials should be pruned, so no valid model
     assert optimizer.model_ is None
 
 
 # Test per-trial timeout (timeout > sleep, so trials succeed)
-def test_trial_timeout10(data):
-    optimizer = Optimizer(algorithm="sleep", trial_timeout=10, n_trials=2)
+def test_trial_timeout10(data, slow_algorithm):
+    optimizer = Optimizer(algorithm="kmeans", trial_timeout=10, n_trials=2)
     optimizer.fit(data)
     _assert_cluster_descriptors(optimizer, data, expect_cluster_centers=True)
 

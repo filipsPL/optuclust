@@ -1,6 +1,5 @@
 import logging
 import signal
-import time
 
 import numpy as np
 import optuna
@@ -47,7 +46,6 @@ class Optimizer(BaseEstimator, ClusterMixin):
         "gaussianmixture",
         "hdbscan",
         "kmedoids",
-        "sleep",
         "som",
     ]
 
@@ -65,50 +63,6 @@ class Optimizer(BaseEstimator, ClusterMixin):
         "gaussianmixture",
         "kmedoids",
         "som",
-        "sleep",
-    }
-
-    SAFE_DEFAULTS = {
-        "kmeans": {"n_clusters": 3, "max_iter": 300, "tol": 1e-4, "n_init": 10},
-        "minibatchkmeans": {
-            "n_clusters": 8,
-            "batch_size": 100,
-            "max_iter": 300,
-            "tol": 1e-4,
-            "n_init": 10,
-        },
-        "dbscan": {
-            "eps": 0.5,
-            "min_samples": 5,
-            "metric": "euclidean",
-            "p": 2,
-        },
-        "meanshift": {"bandwidth": 2.5, "bin_seeding": True},
-        "agglomerativeclustering": {"n_clusters": 3, "linkage": "ward"},
-        "spectralclustering": {
-            "n_clusters": 3,
-            "n_neighbors": 10,
-            "eigen_tol": 1e-4,
-        },
-        "affinitypropagation": {"damping": 0.9, "convergence_iter": 15},
-        "birch": {"n_clusters": 3, "threshold": 0.5, "branching_factor": 50},
-        "optics": {
-            "min_samples": 5,
-            "cluster_method": "xi",
-        },
-        "gaussianmixture": {"n_components": 3, "covariance_type": "full"},
-        "hdbscan": {
-            "min_cluster_size": 5,
-            "min_samples": 1,
-            "cluster_selection_epsilon": 0.0,
-            "allow_single_cluster": False,
-        },
-        "kmedoids": {"n_clusters": 3, "method": "pam", "metric": "euclidean"},
-        "som": {
-            "m": 10,
-            "n": 10,
-            "dim": None,
-        },
     }
 
     def __init__(
@@ -163,6 +117,9 @@ class Optimizer(BaseEstimator, ClusterMixin):
         if storage is None:
             storage = optuna.storages.InMemoryStorage()
 
+        # NOTE: study_name is keyed only on algorithm+scoring, not on X. Resuming
+        # from the same storage with a different dataset silently mixes trials
+        # from incompatible data into the same study.
         study_name = f"study_{self.algorithm}_{self.scoring}"
         logger.info("Storage: %s, internal study name: %s", storage, study_name)
 
@@ -434,11 +391,6 @@ class Optimizer(BaseEstimator, ClusterMixin):
             )
             return KMedoids(n_clusters=n_clusters, method=method, metric="euclidean")
 
-        elif self.algorithm == "sleep":
-            # Fake algorithm to induce timeout for testing
-            time.sleep(3)
-            return KMeans(n_clusters=3, n_init="auto")
-
         elif self.algorithm == "som":
             m = trial.suggest_int("m", 2, 20)
             n = trial.suggest_int("n", 2, 20)
@@ -568,6 +520,7 @@ class ClustGridSearch(BaseEstimator, ClusterMixin):
                 "optics",
                 "gaussianmixture",
                 "hdbscan",
+                "som",
             ]
         elif self.mode == "fast":
             algorithms = ["kmeans", "hdbscan"]

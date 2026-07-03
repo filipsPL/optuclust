@@ -128,7 +128,7 @@ algorithms = [
 - **show_progress_bar:** Display a progress bar during optimization. Default is `True`.
 - **timeout:** Maximum duration (in seconds) for all trials in the optimization process.
 - **trial_timeout:** Maximum duration (in seconds) for each individual trial (Unix only, uses `SIGALRM`).
-- **storage:** Optuna storage URI, e.g. `sqlite:///optimization.db`. When provided, enables resuming a previous optimization run.
+- **storage:** Optuna storage URI, e.g. `sqlite:///optimization.db`. When provided, enables resuming a previous optimization run. **Caveat:** the study is keyed only on `algorithm` + `scoring`, not on the input data — resuming from the same storage with a *different* dataset silently mixes trials from incompatible data into the same study. Use separate storage files (or study names) per dataset.
 - **logfile:** Reserved for future use.
 
 ### Fitted Attributes
