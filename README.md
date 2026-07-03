@@ -38,17 +38,12 @@
    git clone git@github.com:filipsPL/optuclust.git
    ```
 
-2. Navigate to the cloned directory and install the required dependencies:
+2. Navigate to the cloned directory and install **optuclust** (dependencies are
+   pulled in automatically from `pyproject.toml`):
 
    ```bash
    cd optuclust
-   pip install -r requirements.txt
-   ```
-
-3. Install **optuclust**:
-
-   ```bash
-   python setup.py install
+   pip install .
    ```
 
 **Requires:** Python >= 3.8, scikit-learn >= 1.4
@@ -129,7 +124,8 @@ algorithms = [
 - **timeout:** Maximum duration (in seconds) for all trials in the optimization process.
 - **trial_timeout:** Maximum duration (in seconds) for each individual trial (Unix only, uses `SIGALRM`).
 - **storage:** Optuna storage URI, e.g. `sqlite:///optimization.db`. When provided, enables resuming a previous optimization run. **Caveat:** the study is keyed only on `algorithm` + `scoring`, not on the input data — resuming from the same storage with a *different* dataset silently mixes trials from incompatible data into the same study. Use separate storage files (or study names) per dataset.
-- **logfile:** Reserved for future use.
+- **logfile:** Optional path. When set, log messages from the `optuclust` logger are additionally written to this file for the duration of `fit()`.
+- **random_state:** Optional `int` seed for reproducibility. Seeds Optuna's `TPESampler` and every underlying model that accepts a `random_state` (`kmeans`, `minibatchkmeans`, `spectralclustering`, `affinitypropagation`, `gaussianmixture`, `kmedoids`, `som`). Algorithms without native randomness (`dbscan`, `meanshift`, `agglomerativeclustering`, `birch`, `optics`, `hdbscan`) ignore it.
 
 ### Fitted Attributes
 
@@ -153,6 +149,7 @@ After calling `fit(X)`:
 - **scoring:** Metric to select the best clustering algorithm. Options are `silhouette_score`, `calinski_harabasz_score`, and `davies_bouldin_score`.
 - **verbose:** Enable detailed logging if set to `True`.
 - **show_progress_bar:** Display a progress bar for each algorithm.
+- **random_state:** Optional `int` seed, passed through to every algorithm's `Optimizer` for reproducibility.
 
 ## Running Tests
 

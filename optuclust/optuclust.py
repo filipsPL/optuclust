@@ -1,8 +1,10 @@
 import logging
 import signal
+from contextlib import contextmanager
 
 import numpy as np
 import optuna
+from scipy.spatial.distance import cdist
 from sklearn.base import BaseEstimator, ClusterMixin
 from sklearn.cluster import (
     DBSCAN,
@@ -76,6 +78,7 @@ class Optimizer(BaseEstimator, ClusterMixin):
         trial_timeout=None,
         storage=None,
         logfile=None,
+        random_state=None,
     ):
         self.algorithm = algorithm
         self.n_trials = n_trials
@@ -86,6 +89,7 @@ class Optimizer(BaseEstimator, ClusterMixin):
         self.trial_timeout = trial_timeout
         self.storage = storage
         self.logfile = logfile
+        self.random_state = random_state
 
     def _validate_params(self):
         if self.algorithm not in self.VALID_ALGORITHMS:
@@ -94,131 +98,165 @@ class Optimizer(BaseEstimator, ClusterMixin):
             raise ValueError(f"Scoring must be one of {self.VALID_SCORING}")
         if not isinstance(self.n_trials, int) or self.n_trials <= 0:
             raise ValueError("n_trials must be a positive integer")
+        if self.random_state is not None and not isinstance(self.random_state, int):
+            raise ValueError("random_state must be an int or None")
+
+    @contextmanager
+    def _logfile_handler(self):
+        """Attach a FileHandler to the module logger for the duration of fit()."""
+        handler = None
+        old_level = logger.level
+        if self.logfile:
+            handler = logging.FileHandler(self.logfile)
+            handler.setFormatter(
+                logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+            )
+            logger.addHandler(handler)
+            # The logger has no level set by default (relies on the root logger,
+            # typically WARNING), which would silently swallow our info-level
+            # progress messages before they ever reach the file handler.
+            if old_level == logging.NOTSET or old_level > logging.INFO:
+                logger.setLevel(logging.INFO)
+        try:
+            yield
+        finally:
+            if handler is not None:
+                logger.removeHandler(handler)
+                handler.close()
+                logger.setLevel(old_level)
 
     def fit(self, X, y=None):
         self._validate_params()
         X = check_array(X)
         self.n_features_in_ = X.shape[1]
 
-        # Configure optuna verbosity locally
-        if isinstance(self.verbose, bool):
-            optuna.logging.set_verbosity(
-                optuna.logging.INFO if self.verbose else optuna.logging.WARNING
+        with self._logfile_handler():
+            # Configure optuna verbosity locally
+            if isinstance(self.verbose, bool):
+                optuna.logging.set_verbosity(
+                    optuna.logging.INFO if self.verbose else optuna.logging.WARNING
+                )
+                _show_progress_bar = (
+                    self.show_progress_bar if not self.verbose else False
+                )
+            elif isinstance(self.verbose, int):
+                optuna.logging.set_verbosity(self.verbose)
+                _show_progress_bar = self.show_progress_bar
+            else:
+                _show_progress_bar = self.show_progress_bar
+
+            # Resolve storage
+            storage = self.storage
+            if storage is None:
+                storage = optuna.storages.InMemoryStorage()
+
+            # NOTE: study_name is keyed only on algorithm+scoring, not on X. Resuming
+            # from the same storage with a different dataset silently mixes trials
+            # from incompatible data into the same study.
+            study_name = f"study_{self.algorithm}_{self.scoring}"
+            logger.info("Storage: %s, internal study name: %s", storage, study_name)
+
+            def timeout_handler(signum, frame):
+                raise TimeoutError("Objective function timed out")
+
+            def objective(trial):
+                if self.trial_timeout:
+                    signal.alarm(int(self.trial_timeout))
+
+                try:
+                    model = self._suggest_model(trial, X)
+                    model.fit(X)
+                    labels = (
+                        model.labels_
+                        if hasattr(model, "labels_")
+                        else model.predict(X)
+                    )
+                    score = self._compute_score(X, labels)
+                    return score
+                except TimeoutError:
+                    trial.report(float("-inf"), step=0)
+                    raise optuna.TrialPruned("Trial pruned due to timeout")
+                finally:
+                    if self.trial_timeout:
+                        signal.alarm(0)
+
+            # Determine direction of optimization
+            direction = "maximize"
+            if self.scoring == "davies_bouldin_score":
+                direction = "minimize"
+
+            self.study_ = optuna.create_study(
+                direction=direction,
+                study_name=study_name,
+                storage=storage,
+                load_if_exists=True,
+                sampler=optuna.samplers.TPESampler(seed=self.random_state),
             )
-            _show_progress_bar = self.show_progress_bar if not self.verbose else False
-        elif isinstance(self.verbose, int):
-            optuna.logging.set_verbosity(self.verbose)
-            _show_progress_bar = self.show_progress_bar
-        else:
-            _show_progress_bar = self.show_progress_bar
 
-        # Resolve storage
-        storage = self.storage
-        if storage is None:
-            storage = optuna.storages.InMemoryStorage()
+            n_existing = len(self.study_.trials)
+            if n_existing > 0:
+                logger.info(
+                    "Resuming optimization from storage, starting from trial %d.",
+                    n_existing,
+                )
+            else:
+                logger.info("Starting a new optimization.")
 
-        # NOTE: study_name is keyed only on algorithm+scoring, not on X. Resuming
-        # from the same storage with a different dataset silently mixes trials
-        # from incompatible data into the same study.
-        study_name = f"study_{self.algorithm}_{self.scoring}"
-        logger.info("Storage: %s, internal study name: %s", storage, study_name)
-
-        def timeout_handler(signum, frame):
-            raise TimeoutError("Objective function timed out")
-
-        def objective(trial):
+            old_handler = None
             if self.trial_timeout:
-                signal.alarm(int(self.trial_timeout))
+                old_handler = signal.signal(signal.SIGALRM, timeout_handler)
 
             try:
-                model = self._suggest_model(trial, X)
-                model.fit(X)
-                labels = (
-                    model.labels_ if hasattr(model, "labels_") else model.predict(X)
+                self.study_.optimize(
+                    objective,
+                    n_trials=self.n_trials,
+                    show_progress_bar=_show_progress_bar,
+                    timeout=self.timeout,
                 )
-                score = self._compute_score(X, labels)
-                return score
-            except TimeoutError:
-                trial.report(float("-inf"), step=0)
-                raise optuna.TrialPruned("Trial pruned due to timeout")
             finally:
-                if self.trial_timeout:
-                    signal.alarm(0)
+                if old_handler is not None:
+                    signal.signal(signal.SIGALRM, old_handler)
 
-        # Determine direction of optimization
-        direction = "maximize"
-        if self.scoring == "davies_bouldin_score":
-            direction = "minimize"
+            completed_trials = [
+                t
+                for t in self.study_.trials
+                if t.state == optuna.trial.TrialState.COMPLETE
+            ]
 
-        self.study_ = optuna.create_study(
-            direction=direction,
-            study_name=study_name,
-            storage=storage,
-            load_if_exists=True,
-        )
+            if not completed_trials:
+                logger.warning(
+                    "All trials were pruned. No valid results were obtained."
+                )
+                self.best_params_ = None
+                self.model_ = None
+                self.labels_ = None
+                self.centroids_ = None
+                self.medoids_ = None
+                self.modes_ = None
+                return self
 
-        n_existing = len(self.study_.trials)
-        if n_existing > 0:
+            self.best_params_ = self.study_.best_params
             logger.info(
-                "Resuming optimization from storage, starting from trial %d.",
-                n_existing,
+                "Optimization completed. Best parameters: %s", self.best_params_
             )
-        else:
-            logger.info("Starting a new optimization.")
 
-        old_handler = None
-        if self.trial_timeout:
-            old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+            self.model_ = self._get_best_model(X)
+            self.model_.fit(X)
 
-        try:
-            self.study_.optimize(
-                objective,
-                n_trials=self.n_trials,
-                show_progress_bar=_show_progress_bar,
-                timeout=self.timeout,
+            self.labels_ = (
+                self.model_.labels_
+                if hasattr(self.model_, "labels_")
+                else self.model_.predict(X)
             )
-        finally:
-            if old_handler is not None:
-                signal.signal(signal.SIGALRM, old_handler)
+            logger.info(
+                "Final model fitted. Number of clusters: %d",
+                len(set(self.labels_)),
+            )
 
-        completed_trials = [
-            t
-            for t in self.study_.trials
-            if t.state == optuna.trial.TrialState.COMPLETE
-        ]
-
-        if not completed_trials:
-            logger.warning("All trials were pruned. No valid results were obtained.")
-            self.best_params_ = None
-            self.model_ = None
-            self.labels_ = None
-            self.centroids_ = None
-            self.medoids_ = None
-            self.modes_ = None
-            return self
-
-        self.best_params_ = self.study_.best_params
-        logger.info(
-            "Optimization completed. Best parameters: %s", self.best_params_
-        )
-
-        self.model_ = self._get_best_model(X)
-        self.model_.fit(X)
-
-        self.labels_ = (
-            self.model_.labels_
-            if hasattr(self.model_, "labels_")
-            else self.model_.predict(X)
-        )
-        logger.info(
-            "Final model fitted. Number of clusters: %d",
-            len(set(self.labels_)),
-        )
-
-        # Eagerly compute cluster descriptors
-        self.centroids_ = self._compute_centroids(X)
-        self.medoids_ = self._compute_medoids(X)
-        self.modes_ = self._compute_modes(X)
+            # Eagerly compute cluster descriptors
+            self.centroids_ = self._compute_centroids(X)
+            self.medoids_ = self._compute_medoids(X)
+            self.modes_ = self._compute_modes(X)
 
         return self
 
@@ -274,7 +312,11 @@ class Optimizer(BaseEstimator, ClusterMixin):
             max_iter = trial.suggest_int("max_iter", 100, 500)
             tol = trial.suggest_float("tol", 1e-6, 1e-2)
             return KMeans(
-                n_clusters=n_clusters, max_iter=max_iter, tol=tol, n_init="auto"
+                n_clusters=n_clusters,
+                max_iter=max_iter,
+                tol=tol,
+                n_init="auto",
+                random_state=self.random_state,
             )
 
         elif self.algorithm == "minibatchkmeans":
@@ -288,6 +330,7 @@ class Optimizer(BaseEstimator, ClusterMixin):
                 max_iter=max_iter,
                 tol=tol,
                 n_init="auto",
+                random_state=self.random_state,
             )
 
         elif self.algorithm == "dbscan":
@@ -319,14 +362,19 @@ class Optimizer(BaseEstimator, ClusterMixin):
             n_neighbors = trial.suggest_int("n_neighbors", 2, 20)
             eigen_tol = trial.suggest_float("eigen_tol", 1e-6, 1e-2)
             return SpectralClustering(
-                n_clusters=n_clusters, n_neighbors=n_neighbors, eigen_tol=eigen_tol
+                n_clusters=n_clusters,
+                n_neighbors=n_neighbors,
+                eigen_tol=eigen_tol,
+                random_state=self.random_state,
             )
 
         elif self.algorithm == "affinitypropagation":
             damping = trial.suggest_float("damping", 0.5, 0.99)
             convergence_iter = trial.suggest_int("convergence_iter", 10, 200)
             return AffinityPropagation(
-                damping=damping, convergence_iter=convergence_iter
+                damping=damping,
+                convergence_iter=convergence_iter,
+                random_state=self.random_state,
             )
 
         elif self.algorithm == "birch":
@@ -356,7 +404,9 @@ class Optimizer(BaseEstimator, ClusterMixin):
                 "covariance_type", ["full", "tied", "diag", "spherical"]
             )
             return GaussianMixture(
-                n_components=n_components, covariance_type=covariance_type
+                n_components=n_components,
+                covariance_type=covariance_type,
+                random_state=self.random_state,
             )
 
         elif self.algorithm == "hdbscan":
@@ -389,12 +439,17 @@ class Optimizer(BaseEstimator, ClusterMixin):
                     "pammedsil",
                 ],
             )
-            return KMedoids(n_clusters=n_clusters, method=method, metric="euclidean")
+            return KMedoids(
+                n_clusters=n_clusters,
+                method=method,
+                metric="euclidean",
+                random_state=self.random_state,
+            )
 
         elif self.algorithm == "som":
             m = trial.suggest_int("m", 2, 20)
             n = trial.suggest_int("n", 2, 20)
-            return SOM(m=m, n=n, dim=X.shape[1])
+            return SOM(m=m, n=n, dim=X.shape[1], random_state=self.random_state)
 
         else:
             raise ValueError(f"Unsupported algorithm: {self.algorithm}")
@@ -434,12 +489,8 @@ class Optimizer(BaseEstimator, ClusterMixin):
             cluster_points = X[self.labels_ == label]
             if len(cluster_points) == 0:
                 continue
-            # Squared Euclidean pairwise distances
-            distances = np.sum(
-                (cluster_points[:, np.newaxis] - cluster_points[np.newaxis, :]) ** 2,
-                axis=2,
-            )
-            medoid_index = np.argmin(np.sum(distances, axis=1))
+            distances = cdist(cluster_points, cluster_points, metric="sqeuclidean")
+            medoid_index = np.argmin(distances.sum(axis=1))
             medoids.append(cluster_points[medoid_index])
         if len(medoids) == 0:
             return None
@@ -485,6 +536,7 @@ class ClustGridSearch(BaseEstimator, ClusterMixin):
         scoring="silhouette_score",
         verbose=False,
         show_progress_bar=True,
+        random_state=None,
     ):
         """
         Initialize the ClustGridSearch.
@@ -493,12 +545,14 @@ class ClustGridSearch(BaseEstimator, ClusterMixin):
         :param n_trials: Number of trials for each algorithm's hyperparameter optimization.
         :param scoring: The metric used to select the best clustering (default: 'silhouette_score').
         :param verbose: Whether to print additional information during the search.
+        :param random_state: Seed passed through to each algorithm's Optimizer for reproducibility.
         """
         self.mode = mode
         self.n_trials = n_trials
         self.scoring = scoring
         self.verbose = verbose
         self.show_progress_bar = show_progress_bar
+        self.random_state = random_state
 
     def fit(self, X, y=None):
         """
@@ -538,6 +592,7 @@ class ClustGridSearch(BaseEstimator, ClusterMixin):
                 scoring=self.scoring,
                 verbose=self.verbose,
                 show_progress_bar=self.show_progress_bar,
+                random_state=self.random_state,
             )
 
             try:

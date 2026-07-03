@@ -221,3 +221,55 @@ def test_grid_search_invalid_mode(data):
     grid_search = ClustGridSearch(mode="bogus", n_trials=5, show_progress_bar=False)
     with pytest.raises(ValueError, match="Invalid mode"):
         grid_search.fit(data)
+
+
+def test_invalid_random_state(data):
+    optimizer = Optimizer(
+        algorithm="kmeans", n_trials=10, random_state=1.5, verbose=False
+    )
+    with pytest.raises(ValueError, match="random_state must be"):
+        optimizer.fit(data)
+
+
+def test_random_state_reproducible(data):
+    optimizer1 = Optimizer(
+        algorithm="kmeans", n_trials=10, random_state=0, show_progress_bar=False
+    )
+    optimizer1.fit(data)
+
+    optimizer2 = Optimizer(
+        algorithm="kmeans", n_trials=10, random_state=0, show_progress_bar=False
+    )
+    optimizer2.fit(data)
+
+    assert optimizer1.best_params_ == optimizer2.best_params_
+    np.testing.assert_array_equal(optimizer1.labels_, optimizer2.labels_)
+
+
+def test_logfile_writes_log_messages(data, tmp_path):
+    logfile = tmp_path / "optuclust.log"
+    optimizer = Optimizer(
+        algorithm="kmeans",
+        n_trials=3,
+        logfile=str(logfile),
+        show_progress_bar=False,
+    )
+    optimizer.fit(data)
+
+    assert logfile.exists()
+    content = logfile.read_text()
+    assert "Optimization completed" in content
+
+
+def test_medoid_is_a_cluster_member_with_min_total_distance(data):
+    optimizer = Optimizer(algorithm="kmeans", n_trials=10, show_progress_bar=False)
+    optimizer.fit(data)
+
+    for label, medoid in zip(sorted(set(optimizer.labels_) - {-1}), optimizer.medoids_):
+        cluster_points = data[optimizer.labels_ == label]
+        distances = np.sum(
+            (cluster_points[:, np.newaxis] - cluster_points[np.newaxis, :]) ** 2,
+            axis=2,
+        )
+        expected_medoid = cluster_points[np.argmin(distances.sum(axis=1))]
+        np.testing.assert_array_almost_equal(medoid, expected_medoid)
