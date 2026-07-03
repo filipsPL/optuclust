@@ -46,7 +46,7 @@
    pip install .
    ```
 
-**Requires:** Python >= 3.8, scikit-learn >= 1.4
+**Requires:** Python >= 3.8, scikit-learn >= 1.2
 
 ## Usage
 
